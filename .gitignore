@@ -1,0 +1,5 @@
+node_modules/
+.env
+.cursor-bridge.pid
+cursor-bridge.log
+*.log

@@ -1,0 +1,29 @@
+{
+  "name": "openclaw-bridge-cursorcli",
+  "version": "1.0.0",
+  "description": "OpenAI-compatible API proxy that bridges OpenClaw to Cursor CLI agent — use frontier models (Claude 4.6 Opus, GPT-5.2, etc.) through your Cursor subscription",
+  "type": "module",
+  "main": "cursor-bridge.mjs",
+  "bin": {
+    "cursor-bridge": "./cursor-bridge.mjs"
+  },
+  "scripts": {
+    "start": "node cursor-bridge.mjs",
+    "dev": "node --watch cursor-bridge.mjs"
+  },
+  "keywords": [
+    "openclaw",
+    "cursor",
+    "cursor-cli",
+    "openai",
+    "proxy",
+    "bridge",
+    "ai",
+    "claude",
+    "opus"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  }
+}
