@@ -1,3 +1,5 @@
+**[English](README.md)** | **[繁體中文](README.zh-TW.md)**
+
 # openclaw-bridge-cursorcli
 
 Bridge [OpenClaw](https://github.com/openclaw/openclaw) to [Cursor CLI](https://cursor.com/cli) — use frontier AI models (Claude 4.6 Opus, GPT-5.2, Gemini 3 Pro, etc.) through your Cursor subscription, **no API keys needed**.
