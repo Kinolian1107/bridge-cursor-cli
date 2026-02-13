@@ -33,7 +33,15 @@ Telegram / WhatsApp / Discord / Signal / 等等
        └────────────────────────┘
 ```
 
-**運作原理：** cursor-bridge 提供一個 OpenAI 相容的 API（`/v1/chat/completions`）。當 OpenClaw 發送請求時，bridge 會將其轉譯成 `cursor agent --print` 指令並串流回傳結果。零外部依賴 — 只使用 Node.js 內建模組。
+**運作原理：** cursor-bridge 提供一個 OpenAI 相容的 API（`/v1/chat/completions`）。當 OpenClaw 發送請求時，bridge 會將其轉譯成 `cursor agent --print --stream-json` 指令並串流回傳結果。零外部依賴 — 只使用 Node.js 內建模組。
+
+## v1.1 更新內容
+
+- **Token 用量回報** — 準確估算並回報 `prompt_tokens`、`completion_tokens` 和 `thinking_tokens`，讓 OpenClaw 的 compaction 機制正確運作。
+- **Tool Bridge 模式** — 當 OpenClaw 發送 `tools` 參數時，cursor-bridge 會將工具定義注入到 prompt 中，並將模型的工具呼叫回應解析為 OpenAI 相容的 `tool_calls` 格式。包含 Cursor workspace 規則檔（`workspace-rules/tool-bridge.mdc`）。
+- **大型 prompt 處理（E2BIG 修復）** — 超過 32KB 的 prompt 改用 stdin pipe 傳遞，避免 Linux 上的 `E2BIG` 錯誤。
+- **結構化 stream-json 輸出** — 使用 `--output-format stream-json` 可靠解析 thinking、assistant、tool_call 和 result 事件。
+- **改善錯誤處理** — 將錯誤分類（context overflow、timeout、rate limit、auth）為 OpenAI 相容的錯誤類型。
 
 ## 前置需求
 
@@ -199,11 +207,28 @@ curl http://127.0.0.1:18790/v1/chat/completions \
    - 系統訊息 → `<system_instructions>` 區塊
    - 對話歷史 → `<conversation_history>` 區塊
    - 最新的使用者訊息 → 附加在最後
-3. **cursor-bridge** 啟動 `cursor agent --print --force --model <model>` 並傳入提示
+   - 若有 `tools` → 注入為 `<openclaw_tools>` 區塊 + `--mode ask` 防止原生工具執行
+3. **cursor-bridge** 啟動 `cursor agent --print --force --model <model> --output-format stream-json --stream-partial-output` 並傳入提示
+   - Prompt ≤ 32KB：作為 CLI 參數傳遞
+   - Prompt > 32KB：寫入暫存檔並透過 `cat file | cursor-agent ...` pipe 傳遞
 4. **cursor agent** 透過你的 Cursor 訂閱使用選定的模型處理提示
-5. 回應以 OpenAI 相容的 SSE 事件串流回傳（或單一 JSON 回應）
+5. Bridge 解析 NDJSON `stream-json` 事件（init、thinking、assistant、tool_call、result）並轉換為 OpenAI 相容的 SSE 事件
+6. Token 用量從字元數估算並包含在最後的回應 chunk 中
 
-當提示超過 128KB 時，bridge 會寫入暫存檔並使用 shell 展開來傳遞。
+### Tool Bridge 模式
+
+當 OpenClaw 在 API 請求中包含 `tools` 時：
+1. Bridge 將工具定義以 XML 格式注入到 prompt 中
+2. Cursor workspace 規則（`workspace-rules/tool-bridge.mdc`）指示模型以 `<tool_call>` XML 格式輸出工具呼叫
+3. Bridge 解析這些 XML 區塊並轉換為 OpenAI `tool_calls` 格式
+4. OpenClaw 收到標準的 `tool_calls` 後可以執行它們，並將結果送回進行後續對話
+
+啟用 Tool Bridge 模式，將規則檔複製到 Cursor workspace：
+
+```bash
+mkdir -p ~/.openclaw/workspace/.cursor/rules/
+cp workspace-rules/tool-bridge.mdc ~/.openclaw/workspace/.cursor/rules/
+```
 
 ## 疑難排解
 

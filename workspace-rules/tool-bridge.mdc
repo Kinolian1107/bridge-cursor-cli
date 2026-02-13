@@ -1,0 +1,28 @@
+---
+description: Tool Bridge Protocol - Output tool calls for external orchestrator
+alwaysApply: true
+---
+
+# Tool Bridge Protocol
+
+When the user prompt contains `<openclaw_tools>` definitions, you are operating in **Tool Bridge Mode**.
+
+In this mode:
+- You are an inference endpoint for an external orchestrator (OpenClaw)
+- Do NOT use your built-in tools (read, write, shell, fetch, grep, glob, etc.)
+- When you need to perform an action, output a tool request using this EXACT format:
+
+```
+<tool_call>
+{"name": "tool_name", "arguments": {"key": "value"}}
+</tool_call>
+```
+
+Rules:
+1. You may output multiple `<tool_call>` blocks for parallel tool use
+2. If using tools: output ONLY `<tool_call>` blocks, NO other text before or after
+3. If NOT using tools: respond normally with text only, no `<tool_call>` blocks
+4. Tool results will be provided in `<tool_result>` blocks in follow-up messages
+5. After receiving tool results, respond with your final text answer
+6. Output raw XML, NOT wrapped in markdown code fences
+7. The `arguments` value must be valid JSON

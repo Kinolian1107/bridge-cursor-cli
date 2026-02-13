@@ -33,7 +33,15 @@ Telegram / WhatsApp / Discord / Signal / etc.
        └────────────────────────┘
 ```
 
-**How it works:** cursor-bridge exposes an OpenAI-compatible API (`/v1/chat/completions`). When OpenClaw sends a request, the bridge translates it into a `cursor agent --print` call and streams the response back. Zero external dependencies — pure Node.js built-in modules.
+**How it works:** cursor-bridge exposes an OpenAI-compatible API (`/v1/chat/completions`). When OpenClaw sends a request, the bridge translates it into a `cursor agent --print --stream-json` call and streams the response back. Zero external dependencies — pure Node.js built-in modules.
+
+## What's New in v1.1
+
+- **Token usage reporting** — Accurately estimates and reports `prompt_tokens`, `completion_tokens`, and `thinking_tokens` in every response, enabling OpenClaw's compaction mechanism to work correctly.
+- **Tool Bridge Mode** — When OpenClaw sends `tools` in the request, cursor-bridge injects them into the prompt and parses tool call responses back into OpenAI-compatible `tool_calls` format. Includes a Cursor workspace rule (`workspace-rules/tool-bridge.mdc`) that instructs the model to output structured tool calls.
+- **Large prompt handling (E2BIG fix)** — Prompts longer than 32KB are piped via stdin instead of CLI arguments, preventing `E2BIG` errors on Linux.
+- **Structured stream-json output** — Uses `--output-format stream-json` for reliable parsing of thinking, assistant, tool_call, and result events.
+- **Improved error handling** — Classifies errors (context overflow, timeout, rate limit, auth) into OpenAI-compatible error types for better upstream handling.
 
 ## Prerequisites
 
@@ -199,11 +207,28 @@ This restores the original OpenClaw config from backup and removes the auto-star
    - System messages → `<system_instructions>` block
    - Conversation history → `<conversation_history>` block
    - Latest user message → appended at the end
-3. **cursor-bridge** spawns `cursor agent --print --force --model <model>` with the prompt
+   - If `tools` are present → injected as `<openclaw_tools>` block + `--mode ask` to prevent native tool execution
+3. **cursor-bridge** spawns `cursor agent --print --force --model <model> --output-format stream-json --stream-partial-output` with the prompt
+   - Prompts ≤ 32KB: passed as CLI argument
+   - Prompts > 32KB: written to temp file and piped via `cat file | cursor-agent ...`
 4. **cursor agent** processes the prompt using the selected model via your Cursor subscription
-5. The response is streamed back as OpenAI-compatible SSE events (or a single JSON response)
+5. The bridge parses NDJSON `stream-json` events (init, thinking, assistant, tool_call, result) and converts them to OpenAI-compatible SSE events
+6. Token usage is estimated from character counts and included in the final response chunk
 
-For prompts longer than 128KB, the bridge writes to a temp file and uses shell expansion to pass it.
+### Tool Bridge Mode
+
+When OpenClaw sends `tools` in the API request:
+1. The bridge injects tool definitions into the prompt as XML
+2. The Cursor workspace rule (`workspace-rules/tool-bridge.mdc`) instructs the model to output tool calls in `<tool_call>` XML format
+3. The bridge parses these XML blocks and converts them to OpenAI `tool_calls` format
+4. OpenClaw receives standard `tool_calls` and can execute them, sending results back for follow-up
+
+To enable Tool Bridge Mode, copy `workspace-rules/tool-bridge.mdc` to your Cursor workspace:
+
+```bash
+mkdir -p ~/.openclaw/workspace/.cursor/rules/
+cp workspace-rules/tool-bridge.mdc ~/.openclaw/workspace/.cursor/rules/
+```
 
 ## Troubleshooting
 
