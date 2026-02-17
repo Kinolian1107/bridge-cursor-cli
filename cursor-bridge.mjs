@@ -43,6 +43,13 @@ const CONFIG = {
   charsPerToken: parseFloat(process.env.BRIDGE_CHARS_PER_TOKEN || "3.0"),
 };
 
+// Supported models that this bridge can serve
+// These are advertised via GET /v1/models and used for dynamic model switching
+const SUPPORTED_MODELS = [
+  { id: "opus-4.6-thinking", name: "Claude 4.6 Opus (Thinking)" },
+  { id: "sonnet-4.6-thinking", name: "Claude 4.6 Sonnet (Thinking)" },
+];
+
 // Tools that cursor-agent already has natively (no need to inject)
 const CURSOR_NATIVE_TOOLS = new Set([
   "read", "write", "edit", "exec", "process", "browser",
@@ -320,7 +327,16 @@ function classifyError(err, stderrOutput) {
 function runCursorAgent(prompt, requestModel, stream, res, tools) {
   const requestId = `chatcmpl-${randomUUID()}`;
   const created = Math.floor(Date.now() / 1000);
-  const model = CONFIG.cursorModel;
+
+  // Support dynamic model switching: use the model from the request if provided,
+  // otherwise fall back to the configured default.
+  // The request model may come as "opus-4.6-thinking", "cursor/opus-4.6-thinking",
+  // or "bridge-cursor-cli/opus-4.6-thinking" — extract the bare model ID.
+  let model = CONFIG.cursorModel;
+  if (requestModel) {
+    const bare = requestModel.replace(/^(?:bridge-cursor-cli|cursor)\//, "");
+    if (bare) model = bare;
+  }
   const modelName = `cursor/${model}`;
 
   // Build cursor agent arguments
@@ -871,17 +887,16 @@ const server = createServer(async (req, res) => {
       "Content-Type": "application/json",
       "Access-Control-Allow-Origin": "*",
     });
+    const now = Math.floor(Date.now() / 1000);
     res.end(
       JSON.stringify({
         object: "list",
-        data: [
-          {
-            id: `cursor/${CONFIG.cursorModel}`,
-            object: "model",
-            created: Math.floor(Date.now() / 1000),
-            owned_by: "cursor",
-          },
-        ],
+        data: SUPPORTED_MODELS.map((m) => ({
+          id: m.id,
+          object: "model",
+          created: now,
+          owned_by: "cursor",
+        })),
       })
     );
     return;
