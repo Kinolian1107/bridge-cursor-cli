@@ -92,7 +92,7 @@ function estimateTokens(text) {
  */
 function parseToolCalls(text) {
   const calls = [];
-  // Try raw XML format first
+  const seen = new Set();
   for (const regex of [TOOL_CALL_REGEX, TOOL_CALL_FENCED_REGEX]) {
     regex.lastIndex = 0;
     let match;
@@ -100,6 +100,10 @@ function parseToolCalls(text) {
       try {
         const parsed = JSON.parse(match[1]);
         if (parsed.name) {
+          const argsStr = JSON.stringify(parsed.arguments || {});
+          const key = `${parsed.name}::${argsStr}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
           calls.push({
             id: `call_${randomUUID().slice(0, 12)}`,
             name: parsed.name,
@@ -538,6 +542,9 @@ function runCursorAgent(prompt, requestModel, stream, res, tools) {
           }
         } else if (type === "tool_call") {
           toolCallCount++;
+          // Reset accumulator: cursor-agent tool usage splits the output
+          // into separate text segments, each with its own final event.
+          assistantAccum = "";
           if (subtype === "started") {
             const toolName = Object.keys(event.tool_call || {})[0] || "unknown";
             console.log(
@@ -746,6 +753,7 @@ function runCursorAgent(prompt, requestModel, stream, res, tools) {
           }
         } else if (type === "tool_call") {
           toolCallCount++;
+          assistantAccumNS = "";
         } else if (type === "result") {
           resultDurationMs = event.duration_ms || 0;
           isError = event.is_error || event.subtype === "error";
