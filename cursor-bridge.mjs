@@ -437,6 +437,10 @@ function runCursorAgent(prompt, requestModel, stream, res, tools) {
 
     // Buffer for tool bridge mode — we need to collect full output to detect tool_calls
     let toolBridgeBuffer = "";
+    // Track accumulated assistant text to deduplicate.
+    // --stream-partial-output causes cursor-agent to emit token deltas AND
+    // a final complete message; without dedup the output is doubled.
+    let assistantAccum = "";
 
     // Send role delta first
     const roleEvent = {
@@ -503,20 +507,33 @@ function runCursorAgent(prompt, requestModel, stream, res, tools) {
           }
 
           if (textChunk) {
-            outputChars += textChunk.length;
-            if (toolBridgeMode) {
-              // Buffer output in tool bridge mode — we need full output to detect tool_calls
-              toolBridgeBuffer += textChunk;
+            // Deduplicate: --stream-partial-output emits token deltas followed
+            // by a final assistant event containing the full accumulated text.
+            // Detect the final duplicate and skip it.
+            let delta = textChunk;
+            if (assistantAccum.length > 0 && textChunk === assistantAccum) {
+              delta = "";
+            } else if (assistantAccum.length > 0 && textChunk.startsWith(assistantAccum)) {
+              delta = textChunk.slice(assistantAccum.length);
+              assistantAccum = textChunk;
             } else {
-              // Stream directly in normal mode
-              const sseEvent = {
-                id: requestId,
-                object: "chat.completion.chunk",
-                created,
-                model: modelName,
-                choices: [{ index: 0, delta: { content: textChunk }, finish_reason: null }],
-              };
-              res.write(`data: ${JSON.stringify(sseEvent)}\n\n`);
+              assistantAccum += textChunk;
+            }
+
+            if (delta) {
+              outputChars += delta.length;
+              if (toolBridgeMode) {
+                toolBridgeBuffer += delta;
+              } else {
+                const sseEvent = {
+                  id: requestId,
+                  object: "chat.completion.chunk",
+                  created,
+                  model: modelName,
+                  choices: [{ index: 0, delta: { content: delta }, finish_reason: null }],
+                };
+                res.write(`data: ${JSON.stringify(sseEvent)}\n\n`);
+              }
             }
           }
         } else if (type === "tool_call") {
@@ -676,6 +693,7 @@ function runCursorAgent(prompt, requestModel, stream, res, tools) {
   } else {
     // ── Non-Streaming Response ──
     let fullOutput = "";
+    let assistantAccumNS = "";
 
     proc.stdout.on("data", (chunk) => {
       lineBuffer += chunk.toString();
@@ -701,12 +719,29 @@ function runCursorAgent(prompt, requestModel, stream, res, tools) {
           thinkingChars += (event.text || "").length;
         } else if (type === "assistant") {
           const content = event.message?.content;
+          let textChunk = "";
           if (Array.isArray(content)) {
             for (const part of content) {
               if (part.type === "text" && part.text) {
-                fullOutput += part.text;
-                outputChars += part.text.length;
+                textChunk += part.text;
               }
+            }
+          } else if (typeof content === "string" && content) {
+            textChunk = content;
+          }
+          if (textChunk) {
+            let delta = textChunk;
+            if (assistantAccumNS.length > 0 && textChunk === assistantAccumNS) {
+              delta = "";
+            } else if (assistantAccumNS.length > 0 && textChunk.startsWith(assistantAccumNS)) {
+              delta = textChunk.slice(assistantAccumNS.length);
+              assistantAccumNS = textChunk;
+            } else {
+              assistantAccumNS += textChunk;
+            }
+            if (delta) {
+              fullOutput += delta;
+              outputChars += delta.length;
             }
           }
         } else if (type === "tool_call") {
