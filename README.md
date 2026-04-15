@@ -27,6 +27,10 @@ Any OpenAI-compatible client
 
 **How it works:** cursor-bridge exposes an OpenAI-compatible API (`/v1/chat/completions`). When a client sends a request, the bridge translates it into a `cursor agent --print --output-format stream-json` call and streams the response back. Zero external dependencies — pure Node.js built-in modules.
 
+## What's New in v1.4
+
+- **Hermes Agent model sync** — `set-hermesagent.sh` now probes all available models from cursor-bridge and writes them into Hermes `custom_providers`, so `/model` → `bridge-cursor-cli` shows the full model list (80+ models) instead of just one.
+
 ## What's New in v1.3
 
 - **Dynamic model discovery** — `GET /v1/models` and `GET /v1/cursor-models` now probe the Cursor CLI on first request and return the real list of models available under your subscription. Result is cached for the process lifetime, so subsequent calls are instant.
@@ -130,6 +134,22 @@ curl http://127.0.0.1:18790/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"auto","messages":[{"role":"user","content":"Hello!"}]}'
 ```
+
+## Hermes Agent Integration (Optional)
+
+If you use [Hermes Agent](https://github.com/nousresearch/hermes-agent), run `./set-hermesagent.sh` — it configures Hermes to use cursor-bridge and **syncs all available cursor-bridge models** into Hermes so `/model` shows the full list.
+
+```bash
+# Make sure cursor-bridge is running first
+./start.sh daemon
+
+# Configure Hermes and sync all models
+./set-hermesagent.sh
+```
+
+After running, select `bridge-cursor-cli` in Hermes `/model` to see all available models (auto, claude-4.6-opus-*, gpt-5.*, gemini-3.1-pro, etc.).
+
+Re-run `./set-hermesagent.sh` any time to refresh the model list from the bridge.
 
 ## OpenClaw Integration (Optional)
 

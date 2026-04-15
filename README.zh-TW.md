@@ -27,6 +27,10 @@
 
 **運作原理：** cursor-bridge 提供一個 OpenAI 相容的 API（`/v1/chat/completions`）。當用戶端發送請求時，bridge 會將其轉譯成 `cursor agent --print --output-format stream-json` 指令並串流回傳結果。零外部依賴 — 只使用 Node.js 內建模組。
 
+## v1.4 更新內容
+
+- **Hermes Agent 模型同步** — `set-hermesagent.sh` 現在會自動從 cursor-bridge 探測所有可用模型，並寫入 Hermes `custom_providers`，讓 `/model` → `bridge-cursor-cli` 顯示完整的模型清單（80+ 個模型），而不再只有一個。
+
 ## v1.3 更新內容
 
 - **動態模型探索** — `GET /v1/models` 和 `GET /v1/cursor-models` 首次請求時自動探測 Cursor CLI，回傳你的訂閱方案下真正可用的模型清單。結果快取在 process 記憶體中，後續呼叫瞬間回應。
@@ -130,6 +134,22 @@ curl http://127.0.0.1:18790/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"auto","messages":[{"role":"user","content":"你好！"}]}'
 ```
+
+## Hermes Agent 整合（可選）
+
+如果你使用 [Hermes Agent](https://github.com/nousresearch/hermes-agent)，執行 `./set-hermesagent.sh` — 它會設定 Hermes 使用 cursor-bridge，並**自動同步所有可用模型**到 Hermes，讓 `/model` 指令顯示完整的模型清單。
+
+```bash
+# 先確認 cursor-bridge 已啟動
+./start.sh daemon
+
+# 設定 Hermes 並同步所有模型
+./set-hermesagent.sh
+```
+
+執行後，在 Hermes 中選擇 `/model` → `bridge-cursor-cli`，即可看到所有可用模型（auto、claude-4.6-opus-*、gpt-5.*、gemini-3.1-pro 等）。
+
+隨時重新執行 `./set-hermesagent.sh` 可從 bridge 刷新最新的模型清單。
 
 ## OpenClaw 整合（可選）
 
