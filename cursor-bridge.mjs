@@ -1,12 +1,17 @@
 #!/usr/bin/env node
 /**
- * cursor-bridge v1.2 — OpenAI-compatible API proxy for Cursor CLI
+ * cursor-bridge v1.3 — OpenAI-compatible API proxy for Cursor CLI
  *
  * 架構:
  *   Any OpenAI-compatible client  ──(OpenAI API)──►  cursor-bridge (port 18790)  ──►  cursor-agent --print --stream-json
  *
  * 這個代理伺服器提供 OpenAI 相容的 API 格式，
  * 讓任何支援 OpenAI API 的用戶端可以呼叫 Cursor CLI 的 AI 模型。
+ *
+ * v1.3 改進:
+ *   - 詳細日誌：完整請求參數、完整回應、cursor-cli 通訊內容
+ *   - 新增 BRIDGE_VERBOSE 環境變數（預設 true）控制詳細日誌
+ *   - cursor-cli 的 stdout/stderr 即時記錄到 log
  *
  * v1.2 改進:
  *   - Daily log rotation：logs/cursor-bridge.yyyyMMdd.log，一天一份
@@ -66,6 +71,20 @@ console.log = (...args) => { writeToLog("", args); _origLog(...args); };
 console.error = (...args) => { writeToLog("[ERROR] ", args); _origError(...args); };
 console.warn = (...args) => { writeToLog("[WARN] ", args); _origWarn(...args); };
 
+/**
+ * Verbose log — always writes to the log file.
+ * Also prints to stdout only when BRIDGE_VERBOSE is enabled.
+ * Use this for full request/response bodies and cursor-cli I/O.
+ */
+function verboseLog(tag, content) {
+  const line = typeof content === "string" ? content : JSON.stringify(content, null, 2);
+  const entry = `[VERBOSE:${tag}]\n${line}\n[/VERBOSE:${tag}]\n`;
+  getLogStream().write(entry);
+  if (CONFIG.verbose) {
+    _origLog(entry);
+  }
+}
+
 // ─── Configuration ───────────────────────────────────────────────
 const CONFIG = {
   port: parseInt(process.env.BRIDGE_PORT || "18790"),
@@ -87,6 +106,9 @@ const CONFIG = {
   // Token estimation ratio: chars per token (lower = more conservative estimate)
   // For mixed English/Chinese content, ~3.0 is reasonable
   charsPerToken: parseFloat(process.env.BRIDGE_CHARS_PER_TOKEN || "3.0"),
+  // Verbose logging: log full request/response bodies and cursor-cli I/O
+  // Set BRIDGE_VERBOSE=false to disable (defaults to true)
+  verbose: process.env.BRIDGE_VERBOSE !== "false",
 };
 
 // Cache for available Cursor models (populated on first request)
@@ -580,6 +602,13 @@ function runCursorAgent(prompt, requestModel, stream, res, tools) {
     `[${new Date().toISOString()}] ▶ Request ${requestId.slice(-8)}: stream=${stream}, prompt_len=${prompt.length}, est_tokens=${promptTokensEst}, method=${useStdinPipe ? "stdin-pipe" : "arg"}, model=${model}`
   );
 
+  // Log the full cursor-cli command and prompt
+  verboseLog(`${requestId.slice(-8)}:CURSOR_CMD`,
+    `${CONFIG.cursorBin} ${args.map(a => a.includes(" ") ? `'${a}'` : a).join(" ")}`
+    + (useStdinPipe ? `\n[prompt via stdin pipe]` : "")
+  );
+  verboseLog(`${requestId.slice(-8)}:PROMPT`, prompt);
+
   const spawnOpts = {
     env: { ...process.env },
     stdio: ["pipe", "pipe", "pipe"],
@@ -616,7 +645,9 @@ function runCursorAgent(prompt, requestModel, stream, res, tools) {
   }, CONFIG.timeoutMs);
 
   proc.stderr.on("data", (chunk) => {
-    stderrOutput += chunk.toString();
+    const text = chunk.toString();
+    stderrOutput += text;
+    verboseLog(`${requestId.slice(-8)}:CURSOR_STDERR`, text.trimEnd());
   });
 
   /**
@@ -675,6 +706,9 @@ function runCursorAgent(prompt, requestModel, stream, res, tools) {
 
       for (const line of lines) {
         if (!line.trim()) continue;
+
+        // Log each raw line from cursor-cli stdout (streaming mode)
+        verboseLog(`${requestId.slice(-8)}:CURSOR_STDOUT`, line);
 
         let event;
         try {
@@ -859,6 +893,9 @@ function runCursorAgent(prompt, requestModel, stream, res, tools) {
           res.write("data: [DONE]\n\n");
           res.end();
 
+          verboseLog(`${requestId.slice(-8)}:RESPONSE_STREAM`,
+            `[tool_calls] ${parsedToolCalls.map((t) => t.name).join(",")} | usage=${JSON.stringify(usage)}`
+          );
           console.log(
             `[${new Date().toISOString()}] ✓ Request ${requestId.slice(-8)}: completed in ${elapsed}s (stream, tool_calls=${parsedToolCalls.map((t) => t.name).join(",")}, usage=${JSON.stringify(usage)})`
           );
@@ -896,6 +933,9 @@ function runCursorAgent(prompt, requestModel, stream, res, tools) {
       res.write("data: [DONE]\n\n");
       res.end();
 
+      verboseLog(`${requestId.slice(-8)}:RESPONSE_STREAM`,
+        `[stop] code=${code} | tools_invoked=${toolCallCount} | usage=${JSON.stringify(usage)}`
+      );
       console.log(
         `[${new Date().toISOString()}] ✓ Request ${requestId.slice(-8)}: completed in ${elapsed}s (stream, code=${code}, tools=${toolCallCount}, usage=${JSON.stringify(usage)})`
       );
@@ -938,6 +978,9 @@ function runCursorAgent(prompt, requestModel, stream, res, tools) {
 
       for (const line of lines) {
         if (!line.trim()) continue;
+
+        // Log each raw line from cursor-cli stdout (non-streaming mode)
+        verboseLog(`${requestId.slice(-8)}:CURSOR_STDOUT`, line);
 
         let event;
         try {
@@ -1093,6 +1136,7 @@ function runCursorAgent(prompt, requestModel, stream, res, tools) {
         "Content-Type": "application/json",
         "Access-Control-Allow-Origin": "*",
       });
+      verboseLog(`${requestId.slice(-8)}:RESPONSE_BODY`, response);
       res.end(JSON.stringify(response));
     });
 
@@ -1199,6 +1243,18 @@ const server = createServer(async (req, res) => {
     const stream = data.stream === true;
     const tools = data.tools || [];
 
+    // Log full request params
+    verboseLog("REQUEST_PARAMS", {
+      model: data.model,
+      stream,
+      temperature: data.temperature,
+      max_tokens: data.max_tokens,
+      tools_count: tools.length,
+      messages_count: messages.length,
+      messages,
+      ...(tools.length ? { tools } : {}),
+    });
+
     if (!messages.length) {
       sendError(res, 400, "No messages provided", "invalid_request");
       return;
@@ -1239,7 +1295,7 @@ server.listen(CONFIG.port, CONFIG.host, () => {
     : "cursor agent login";
   console.log(`
 ┌──────────────────────────────────────────────────────────┐
-│              cursor-bridge v1.2.0                        │
+│              cursor-bridge v1.3.0                        │
 │    OpenAI-compatible API  →  Cursor CLI Agent            │
 ├──────────────────────────────────────────────────────────┤
 │  Endpoint:   http://${CONFIG.host}:${CONFIG.port}/v1/chat/completions  │
@@ -1250,6 +1306,7 @@ server.listen(CONFIG.port, CONFIG.host, () => {
 │  Workspace:  ${CONFIG.workspace.slice(-43).padEnd(43)}│
 │  Timeout:    ${(CONFIG.timeoutMs / 1000 + "s").padEnd(43)}│
 │  Log:        ${logPath.slice(-43).padEnd(43)}│
+│  Verbose:    ${(CONFIG.verbose ? "on (BRIDGE_VERBOSE=false to disable)" : "off").padEnd(43)}│
 │  Output:     stream-json + stream-partial-output         │
 │  MaxArgLen:  ${(CONFIG.maxArgLen + " chars").padEnd(43)}│
 └──────────────────────────────────────────────────────────┘
