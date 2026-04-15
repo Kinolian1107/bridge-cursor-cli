@@ -1,7 +1,6 @@
 node_modules/
 .env
 cursor-bridge.pid
-cursor-bridge.log
-openclaw-gateway.log
+logs/
 *.log
 *.pid

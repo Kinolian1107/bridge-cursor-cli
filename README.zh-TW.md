@@ -1,83 +1,99 @@
 **[English](README.md)** | **[繁體中文](README.zh-TW.md)**
 
-# openclaw-bridge-cursorcli
+# cursor-bridge
 
-將 [OpenClaw](https://github.com/openclaw/openclaw) 串接到 [Cursor CLI](https://cursor.com/cli) — 透過你的 Cursor 訂閱使用頂級 AI 模型（Claude 4.6 Opus、GPT-5.2、Gemini 3 Pro 等），**不需要額外的 API Key**。
-
-## 為什麼需要這個？
-
-OpenClaw 是一個很棒的個人 AI 助手，但在本地跑模型（例如用 Ollama 跑 Qwen3-14B）需要高階 GPU，而且品質遠比不上頂級模型。如果你已經有 **Cursor 訂閱**（Pro/Business），你就能使用最強的 AI 模型 — 這個 bridge 讓 OpenClaw 直接使用它們。
+將任何 OpenAI 相容的用戶端串接到 [Cursor CLI](https://cursor.com/cli) — 透過你的 Cursor 訂閱使用頂級 AI 模型（Claude 4.6 Opus、GPT-5.2、Gemini 3 Pro 等），**不需要額外的 API Key**。
 
 ## 架構
 
 ```
-Telegram / WhatsApp / Discord / Signal / 等等
+任何 OpenAI 相容的用戶端
+（OpenClaw、Continue.dev、自訂應用、curl 等）
                     │
+                    │  OpenAI 相容 API
                     ▼
        ┌────────────────────────┐
-       │    OpenClaw Gateway     │  port 18789
-       │     (個人 AI 助手)       │
-       └───────────┬────────────┘
-                   │  OpenAI 相容 API
-                   ▼
-       ┌────────────────────────┐
-       │    cursor-bridge        │  port 18790
+       │     cursor-bridge       │  port 18790
        │    (本專案代理伺服器)     │
        └───────────┬────────────┘
                    │  建立子程序
                    ▼
        ┌────────────────────────┐
-       │    cursor agent --print │
-       │  (Cursor CLI 無頭模式)   │
-       │   使用你的 Cursor 訂閱    │
+       │  cursor agent --print   │
+       │   --output-format       │
+       │     stream-json         │
        └────────────────────────┘
 ```
 
-**運作原理：** cursor-bridge 提供一個 OpenAI 相容的 API（`/v1/chat/completions`）。當 OpenClaw 發送請求時，bridge 會將其轉譯成 `cursor agent --print --stream-json` 指令並串流回傳結果。零外部依賴 — 只使用 Node.js 內建模組。
+**運作原理：** cursor-bridge 提供一個 OpenAI 相容的 API（`/v1/chat/completions`）。當用戶端發送請求時，bridge 會將其轉譯成 `cursor agent --print --output-format stream-json` 指令並串流回傳結果。零外部依賴 — 只使用 Node.js 內建模組。
+
+## v1.2 更新內容
+
+- **每日 log 輪轉** — 寫入 `logs/cursor-bridge.yyyyMMdd.log`，一天一份，午夜自動切換，無需重啟。
+- **解耦 OpenClaw 依賴** — cursor-bridge 現在可獨立運作，`install.sh` 的 OpenClaw 整合改為可選。
+- **Worktree 支援** — 設定 `CURSOR_WORKTREE=true` 可將 agent 的編輯隔離在暫時的 git worktree（`~/.cursor/worktrees`）中。
+- **認證可視化** — 啟動 banner 顯示目前使用的認證方式（`CURSOR_API_KEY` / `CURSOR_AUTH_TOKEN` / `cursor agent login`）。
 
 ## v1.1 更新內容
 
-- **Token 用量回報** — 準確估算並回報 `prompt_tokens`、`completion_tokens` 和 `thinking_tokens`，讓 OpenClaw 的 compaction 機制正確運作。
-- **Tool Bridge 模式** — 當 OpenClaw 發送 `tools` 參數時，cursor-bridge 會將工具定義注入到 prompt 中，並將模型的工具呼叫回應解析為 OpenAI 相容的 `tool_calls` 格式。包含 Cursor workspace 規則檔（`workspace-rules/tool-bridge.mdc`）。
-- **大型 prompt 處理（E2BIG 修復）** — 超過 32KB 的 prompt 改用 stdin pipe 傳遞，避免 Linux 上的 `E2BIG` 錯誤。
-- **結構化 stream-json 輸出** — 使用 `--output-format stream-json` 可靠解析 thinking、assistant、tool_call 和 result 事件。
-- **改善錯誤處理** — 將錯誤分類（context overflow、timeout、rate limit、auth）為 OpenAI 相容的錯誤類型。
+- **Token 用量回報** — 準確估算並回報 `prompt_tokens`、`completion_tokens` 和 `thinking_tokens`。
+- **Tool Bridge 模式** — 當用戶端發送 `tools` 參數時，cursor-bridge 會將工具定義注入到 prompt 中，並將 `<tool_call>` 回應解析為 OpenAI 相容的 `tool_calls` 格式。
+- **大型 prompt 處理（E2BIG 修復）** — 超過 32KB 的 prompt 改用 stdin pipe 傳遞。
+- **結構化 stream-json 輸出** — 使用 `--output-format stream-json` 可靠解析事件。
+- **改善錯誤處理** — 將錯誤分類為 OpenAI 相容的錯誤類型。
 
 ## 前置需求
 
 | 需求 | 版本 |
 |------|------|
 | Node.js | >= 22 |
-| [Cursor CLI](https://cursor.com/cli) | 已安裝並登入（`cursor agent login`） |
-| [OpenClaw](https://github.com/openclaw/openclaw) | 已安裝並運行中 |
+| [Cursor CLI](https://cursor.com/cli) | 已安裝（`curl https://cursor.com/install -fsS \| bash`） |
+| Cursor 帳號 | 已登入（`cursor agent login`）或設定 `CURSOR_API_KEY` |
+
+## 認證設定
+
+cursor-bridge 會自動將認證憑證傳遞給 Cursor CLI。三種方式（優先順序如下）：
+
+**方式 1 — CLI 登入（互動使用推薦）：**
+```bash
+cursor agent login
+```
+
+**方式 2 — API Key（daemon/伺服器使用推薦）：**
+```bash
+# 在 .env 中設定：
+CURSOR_API_KEY=your-api-key-here
+```
+
+**方式 3 — Auth Token：**
+```bash
+# 在 .env 中設定：
+CURSOR_AUTH_TOKEN=your-auth-token-here
+```
+
+啟動 banner 會顯示目前使用的認證方式。
 
 ## 快速開始
 
 ```bash
-git clone https://github.com/Kinolian1107/openclaw-bridge-cursorcli.git
-cd openclaw-bridge-cursorcli
+git clone https://github.com/Kinolian1107/openclaw-bridge-cursor-cli.git
+cd openclaw-bridge-cursor-cli
 
-# 執行安裝腳本（自動修改 OpenClaw 設定）
 chmod +x install.sh
 ./install.sh
+# → 偵測 Cursor CLI，建立 .env 與 start/stop 腳本
+# → 若偵測到 OpenClaw，詢問是否自動設定整合（可選）
 
-# 啟動 bridge
 ./start.sh daemon
-
-# 重啟 OpenClaw gateway 以載入新設定
-openclaw gateway stop
-openclaw gateway
 ```
 
 ## 手動設定
-
-如果你想手動設定：
 
 ### 1. 設定環境變數
 
 ```bash
 cp .env.example .env
-# 編輯 .env — 設定 CURSOR_BIN 為你的 cursor-agent 路徑
+# 編輯 .env — 設定 CURSOR_BIN、CURSOR_MODEL、CURSOR_API_KEY
 ```
 
 ### 2. 啟動 bridge
@@ -91,51 +107,58 @@ node cursor-bridge.mjs
 
 # 停止
 ./stop.sh
+
+# 查看今日 log
+tail -f logs/cursor-bridge.$(date +%Y%m%d).log
 ```
 
-### 3. 修改 OpenClaw 設定
+### 3. 測試
 
-編輯 `~/.openclaw/openclaw.json`：
+```bash
+curl http://127.0.0.1:18790/health
+
+curl http://127.0.0.1:18790/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"opus-4.6-thinking","messages":[{"role":"user","content":"你好！"}]}'
+```
+
+## OpenClaw 整合（可選）
+
+如果你使用 [OpenClaw](https://github.com/openclaw/openclaw)，執行 `./install.sh` — 它會偵測 OpenClaw 並詢問是否自動設定。
+
+若要手動設定，編輯 `~/.openclaw/openclaw.json`：
 
 ```jsonc
 {
   "agents": {
     "defaults": {
-      "model": {
-        "primary": "cursor-cli/opus-4.6-thinking"  // ← 改這裡
-      }
+      "model": { "primary": "cursor-cli/opus-4.6-thinking" }
     }
   },
   "models": {
     "providers": {
-      "cursor-cli": {                              // ← 新增這個區塊
+      "cursor-cli": {
         "api": "openai-completions",
         "apiKey": "cursor-bridge-local",
         "baseUrl": "http://127.0.0.1:18790/v1",
-        "models": [
-          {
-            "id": "opus-4.6-thinking",
-            "name": "Claude 4.6 Opus (Thinking) via Cursor CLI",
-            "reasoning": true,
-            "input": ["text"],
-            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
-            "contextWindow": 200000,
-            "maxTokens": 65536
-          }
-        ]
+        "models": [{
+          "id": "opus-4.6-thinking",
+          "name": "Cursor CLI (opus-4.6-thinking)",
+          "reasoning": true,
+          "input": ["text"],
+          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+          "contextWindow": 200000,
+          "maxTokens": 65536
+        }]
       }
     }
   }
 }
 ```
 
-同時更新 `~/.openclaw/agents/main/agent/models.json`，加入相同的 provider 設定。
-
-### 4. 重啟 OpenClaw gateway
-
+然後重啟 OpenClaw gateway：
 ```bash
-openclaw gateway stop
-openclaw gateway
+openclaw gateway stop && openclaw gateway
 ```
 
 ## 設定參數
@@ -148,29 +171,47 @@ openclaw gateway
 | `BRIDGE_HOST` | `127.0.0.1` | 綁定位址 |
 | `CURSOR_MODEL` | `opus-4.6-thinking` | Cursor CLI 模型 ID |
 | `CURSOR_BIN` | `cursor` | `cursor` 或 `cursor-agent` 二進位檔路徑 |
-| `CURSOR_WORKSPACE` | `~/.openclaw/workspace` | cursor agent 工作目錄 |
+| `CURSOR_WORKSPACE` | `~/.cursor-bridge/workspace` | cursor agent 工作目錄 |
 | `CURSOR_MODE` | *（空）* | `ask`（唯讀問答）/ `plan`（唯讀規劃）/ *空* = 完整 agent |
-| `BRIDGE_TIMEOUT_MS` | `300000` | 請求逾時時間（預設 5 分鐘） |
+| `CURSOR_WORKTREE` | `false` | `true` = 在暫時 git worktree 中隔離編輯 |
+| `CURSOR_API_KEY` | *（空）* | Cursor API Key（替代 `cursor agent login`） |
+| `CURSOR_AUTH_TOKEN` | *（空）* | Cursor Auth Token（替代 API Key） |
+| `BRIDGE_TIMEOUT_MS` | `300000` | 請求逾時（預設 5 分鐘） |
+
+## Log 管理
+
+Log 寫入 `logs/` 目錄，每日自動輪轉：
+
+```
+logs/
+└── cursor-bridge.20260416.log   ← 每天一份
+```
+
+```bash
+# 即時追蹤今日 log
+tail -f logs/cursor-bridge.$(date +%Y%m%d).log
+
+# 查看特定日期
+cat logs/cursor-bridge.20260416.log
+```
+
+午夜自動切換新的 log 檔，無需重啟服務。
 
 ## 可用模型
 
-執行 `cursor agent --list-models` 查看所有可用模型。常用選擇：
+執行 `cursor agent --list-models` 查看你的訂閱方案下所有可用模型：
 
-| 模型 ID | 名稱 |
+| 模型 ID | 說明 |
 |---------|------|
-| `opus-4.6-thinking` | Claude 4.6 Opus（帶思考鏈）— **推薦** |
+| `opus-4.6-thinking` | Claude 4.6 Opus（含延伸思考）— **推薦** |
 | `opus-4.6` | Claude 4.6 Opus |
-| `sonnet-4.5-thinking` | Claude 4.5 Sonnet（帶思考鏈） |
+| `sonnet-4.6-thinking` | Claude 4.6 Sonnet（含延伸思考） |
 | `gpt-5.2-codex-high` | GPT-5.2 Codex High |
-| `gpt-5.3-codex` | GPT-5.3 Codex |
 | `gemini-3-pro` | Gemini 3 Pro |
-| `grok` | Grok |
 
-在 `.env` 中設定 `CURSOR_MODEL` 並重啟 bridge 即可切換模型。
+在 `.env` 中設定 `CURSOR_MODEL` 並重啟，或在每次請求的 `model` 欄位直接指定。
 
 ## API 端點
-
-bridge 提供標準的 OpenAI 相容 API：
 
 | 端點 | 方法 | 說明 |
 |------|------|------|
@@ -178,7 +219,7 @@ bridge 提供標準的 OpenAI 相容 API：
 | `/v1/models` | GET | 列出可用模型 |
 | `/v1/chat/completions` | POST | 聊天補全（支援串流與非串流） |
 
-### 範例：直接呼叫 API
+### 範例
 
 ```bash
 # 非串流
@@ -198,56 +239,87 @@ curl http://127.0.0.1:18790/v1/chat/completions \
 ./uninstall.sh
 ```
 
-這會從備份還原原始的 OpenClaw 設定，並移除 `~/.bashrc` 中的自動啟動項目。
+停止 bridge，若有 OpenClaw 備份則詢問是否還原，並移除 `~/.bashrc` 中的自動啟動項目。
 
 ## 運作原理（技術細節）
 
-1. **OpenClaw** 發送 OpenAI 相容的聊天補全請求到 bridge
+### 請求流程
+
+1. **用戶端** 發送 OpenAI 相容的聊天補全請求
 2. **cursor-bridge** 將訊息陣列轉換成單一提示字串：
    - 系統訊息 → `<system_instructions>` 區塊
    - 對話歷史 → `<conversation_history>` 區塊
-   - 最新的使用者訊息 → 附加在最後
-   - 若有 `tools` → 注入為 `<openclaw_tools>` 區塊 + `--mode ask` 防止原生工具執行
-3. **cursor-bridge** 啟動 `cursor agent --print --force --model <model> --output-format stream-json --stream-partial-output` 並傳入提示
+   - 最新使用者訊息 → 附加在最後
+   - 若有 `tools` → 注入為 `<available_tools>` 區塊 + `--mode ask`
+3. **cursor-bridge** 啟動：
+   ```
+   cursor agent --print --force --model <model>
+     --output-format stream-json --stream-partial-output
+     --workspace <path> [--worktree] [--mode ask|plan]
+   ```
    - Prompt ≤ 32KB：作為 CLI 參數傳遞
-   - Prompt > 32KB：寫入暫存檔並透過 `cat file | cursor-agent ...` pipe 傳遞
+   - Prompt > 32KB：透過 stdin pipe 傳遞（避免 Linux `E2BIG` 限制）
 4. **cursor agent** 透過你的 Cursor 訂閱使用選定的模型處理提示
-5. Bridge 解析 NDJSON `stream-json` 事件（init、thinking、assistant、tool_call、result）並轉換為 OpenAI 相容的 SSE 事件
+5. Bridge 解析 NDJSON `stream-json` 事件（`system`、`assistant`、`tool_call`、`result`）並轉換為 OpenAI 相容的 SSE
 6. Token 用量從字元數估算並包含在最後的回應 chunk 中
+
+### CLI Flags 參考
+
+| Flag | 用途 |
+|------|------|
+| `--print` / `-p` | 非互動（headless）模式 |
+| `--force` / `--yolo` | 直接套用檔案修改 |
+| `--output-format stream-json` | 結構化 NDJSON 事件串流 |
+| `--stream-partial-output` | 增量文字 delta，支援即時串流 |
+| `--model <id>` | 選擇模型 |
+| `--workspace <path>` | 設定 repository root |
+| `--worktree` | 在暫時 git worktree 中隔離編輯 |
+| `--mode ask\|plan` | 唯讀模式 |
+
+### Cursor CLI 認證機制
+
+Cursor CLI 支援三種認證方式（按優先順序）：
+
+1. **`CURSOR_API_KEY`** 環境變數
+2. **`CURSOR_AUTH_TOKEN`** 環境變數
+3. **`cursor agent login`** 的本地登入 session
+
+cursor-bridge 透過 `{ ...process.env }` 將所有環境變數傳遞給子程序，因此在 `.env` 或 shell 環境中設定的任何認證方式都會自動生效。
 
 ### Tool Bridge 模式
 
-當 OpenClaw 在 API 請求中包含 `tools` 時：
-1. Bridge 將工具定義以 XML 格式注入到 prompt 中
+當用戶端在 API 請求中包含 `tools` 時：
+1. Bridge 將工具定義以 `<available_tools>` XML 格式注入到 prompt 中
 2. Cursor workspace 規則（`workspace-rules/tool-bridge.mdc`）指示模型以 `<tool_call>` XML 格式輸出工具呼叫
 3. Bridge 解析這些 XML 區塊並轉換為 OpenAI `tool_calls` 格式
-4. OpenClaw 收到標準的 `tool_calls` 後可以執行它們，並將結果送回進行後續對話
 
 啟用 Tool Bridge 模式，將規則檔複製到 Cursor workspace：
-
 ```bash
-mkdir -p ~/.openclaw/workspace/.cursor/rules/
-cp workspace-rules/tool-bridge.mdc ~/.openclaw/workspace/.cursor/rules/
+mkdir -p ~/.cursor-bridge/workspace/.cursor/rules/
+cp workspace-rules/tool-bridge.mdc ~/.cursor-bridge/workspace/.cursor/rules/
 ```
+
+### ACP（Agent Communication Protocol）
+
+Cursor CLI 也支援 `cursor agent acp` — 一個基於 stdio 的 JSON-RPC 2.0 協議，供進階自訂整合使用（JetBrains、Neovim、Zed 等 IDE 插件使用此協議）。cursor-bridge 目前使用較簡單的 `--print` headless 模式；若有更複雜的整合需求可研究 ACP。
 
 ## 疑難排解
 
 ### Bridge 無法啟動
 - 檢查 18790 埠是否已被佔用：`ss -tlnp | grep 18790`
-- 查看日誌：`tail -f cursor-bridge.log`
+- 查看日誌：`tail -f logs/cursor-bridge.$(date +%Y%m%d).log`
 
-### OpenClaw 仍使用舊模型
-- 確認已在修改設定後重啟 OpenClaw gateway
-- 檢查 `~/.openclaw/openclaw.json` — `agents.defaults.model.primary` 應為 `cursor-cli/opus-4.6-thinking`
-- 檢查 `~/.openclaw/agents/main/agent/models.json` — 應包含 `cursor-cli` provider
+### 認證錯誤
+- 執行 `cursor agent login` 進行互動式登入
+- 或在 `.env` 中設定 `CURSOR_API_KEY`
+- 檢查狀態：`cursor agent status`
 
-### Cursor CLI 驗證問題
-- 執行 `cursor agent login` 或 `cursor agent status` 檢查驗證狀態
-- 確認你有有效的 Cursor 訂閱
+### 找不到 Cursor CLI
+- 安裝：`curl https://cursor.com/install -fsS | bash`
+- 若安裝在非標準路徑，在 `.env` 中設定 `CURSOR_BIN` 完整路徑
 
 ### 回應速度慢
 - 第一次請求可能較慢（Cursor agent 啟動時間約 5-15 秒）
-- 後續請求通常會更快
 - `thinking` 模型需要更長時間，但會產生更好的結果
 
 ## 授權條款

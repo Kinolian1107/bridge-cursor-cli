@@ -1,8 +1,9 @@
 #!/bin/bash
 # ─────────────────────────────────────────────────────────────
-# openclaw-bridge-cursorcli uninstaller
+# cursor-bridge uninstaller
 #
-# Restores OpenClaw config from backup and removes auto-start.
+# Stops the bridge, optionally restores OpenClaw config from
+# backup, and removes auto-start entry.
 # ─────────────────────────────────────────────────────────────
 
 set -euo pipefail
@@ -18,8 +19,8 @@ warn() { echo -e "${YELLOW}⚠${NC}  $*"; }
 info() { echo -e "${CYAN}ℹ${NC}  $*"; }
 
 echo ""
-echo "openclaw-bridge-cursorcli uninstaller"
-echo "────────────────────────────────────────"
+echo "cursor-bridge uninstaller"
+echo "──────────────────────────"
 echo ""
 
 # Stop bridge
@@ -28,29 +29,34 @@ if pgrep -f "cursor-bridge.mjs" >/dev/null 2>&1; then
   ok "Stopped cursor-bridge"
 fi
 
-# Restore OpenClaw config
+# Restore OpenClaw config (only if backup exists)
 if [ -f "$BACKUP" ]; then
   read -rp "Restore OpenClaw config from backup? [Y/n] " ans
   if [[ -z "$ans" || "$ans" =~ ^[Yy] ]]; then
     cp "$BACKUP" "$OPENCLAW_CONFIG"
     ok "Restored $OPENCLAW_CONFIG from backup"
+    info "Restart OpenClaw gateway to apply: openclaw gateway stop && openclaw gateway"
   fi
-else
-  warn "No backup found at $BACKUP — manual restore needed"
 fi
 
 # Remove auto-start from .bashrc
 BASHRC="$HOME/.bashrc"
 if grep -qF "cursor-bridge auto-start" "$BASHRC" 2>/dev/null; then
-  # Remove the block (marker line + next 3 lines)
   sed -i '/# cursor-bridge auto-start/,+3d' "$BASHRC"
   ok "Removed auto-start from ~/.bashrc"
 fi
 
 # Cleanup generated files
-rm -f "$SCRIPT_DIR/.env" "$SCRIPT_DIR/.cursor-bridge.pid" "$SCRIPT_DIR/cursor-bridge.log"
+rm -f "$SCRIPT_DIR/.env" "$SCRIPT_DIR/cursor-bridge.pid"
+if [ -d "$SCRIPT_DIR/logs" ]; then
+  read -rp "Delete logs/ directory? [y/N] " ans_logs
+  if [[ "$ans_logs" =~ ^[Yy] ]]; then
+    rm -rf "$SCRIPT_DIR/logs"
+    ok "Deleted logs/"
+  fi
+fi
 ok "Cleaned up generated files"
 
 echo ""
-echo "Done. Restart OpenClaw gateway to apply: openclaw gateway stop && openclaw gateway"
+echo "Done."
 echo ""

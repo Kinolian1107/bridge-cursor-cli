@@ -1,7 +1,7 @@
 {
   "name": "cursor-bridge",
-  "version": "1.1.0",
-  "description": "OpenAI-compatible API proxy that bridges OpenClaw to Cursor CLI agent, with Tool Bridge support",
+  "version": "1.2.0",
+  "description": "OpenAI-compatible API proxy for Cursor CLI — use any OpenAI-compatible client to call Cursor AI models",
   "type": "module",
   "main": "cursor-bridge.mjs",
   "scripts": {

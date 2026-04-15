@@ -1,12 +1,16 @@
 #!/usr/bin/env node
 /**
- * cursor-bridge v1.1 — OpenAI-compatible API proxy for Cursor CLI
+ * cursor-bridge v1.2 — OpenAI-compatible API proxy for Cursor CLI
  *
  * 架構:
- *   OpenClaw  ──(OpenAI API)──►  cursor-bridge (port 18790)  ──►  cursor-agent --print --stream-json
+ *   Any OpenAI-compatible client  ──(OpenAI API)──►  cursor-bridge (port 18790)  ──►  cursor-agent --print --stream-json
  *
- * 這個代理伺服器讓 OpenClaw 可以透過 OpenAI 相容的 API 格式
- * 呼叫 Cursor CLI 的 AI 模型（如 Claude 4.6 Opus Thinking）。
+ * 這個代理伺服器提供 OpenAI 相容的 API 格式，
+ * 讓任何支援 OpenAI API 的用戶端可以呼叫 Cursor CLI 的 AI 模型。
+ *
+ * v1.2 改進:
+ *   - Daily log rotation：logs/cursor-bridge.yyyyMMdd.log，一天一份
+ *   - 解耦 OpenClaw 依賴，install.sh OpenClaw 整合改為可選
  *
  * v1.1 改進:
  *   - 使用 stream-json 格式取得結構化輸出（thinking, tool_call, assistant, result）
@@ -19,9 +23,48 @@
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { writeFileSync, unlinkSync, mkdtempSync, rmdirSync } from "node:fs";
-import { join } from "node:path";
+import { createWriteStream, writeFileSync, unlinkSync, mkdtempSync, rmdirSync, mkdirSync } from "node:fs";
+import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
+
+const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
+
+// ─── Daily log setup ─────────────────────────────────────────────
+const LOG_DIR = join(SCRIPT_DIR, "logs");
+mkdirSync(LOG_DIR, { recursive: true });
+
+function todayStamp() {
+  const d = new Date();
+  return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
+}
+
+let _logDay = todayStamp();
+let _logStream = createWriteStream(join(LOG_DIR, `cursor-bridge.${_logDay}.log`), { flags: "a" });
+
+function getLogStream() {
+  const today = todayStamp();
+  if (today !== _logDay) {
+    _logStream.end();
+    _logDay = today;
+    _logStream = createWriteStream(join(LOG_DIR, `cursor-bridge.${_logDay}.log`), { flags: "a" });
+  }
+  return _logStream;
+}
+
+// Override console to write to log file AND stdout
+const _origLog = console.log.bind(console);
+const _origError = console.error.bind(console);
+const _origWarn = console.warn.bind(console);
+
+function writeToLog(prefix, args) {
+  const msg = args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ");
+  getLogStream().write(`${prefix}${msg}\n`);
+}
+
+console.log = (...args) => { writeToLog("", args); _origLog(...args); };
+console.error = (...args) => { writeToLog("[ERROR] ", args); _origError(...args); };
+console.warn = (...args) => { writeToLog("[WARN] ", args); _origWarn(...args); };
 
 // ─── Configuration ───────────────────────────────────────────────
 const CONFIG = {
@@ -29,9 +72,12 @@ const CONFIG = {
   host: process.env.BRIDGE_HOST || "127.0.0.1",
   cursorModel: process.env.CURSOR_MODEL || "opus-4.6-thinking",
   cursorBin: process.env.CURSOR_BIN || "cursor",
-  workspace: process.env.CURSOR_WORKSPACE || `${process.env.HOME}/.openclaw/workspace`,
+  workspace: process.env.CURSOR_WORKSPACE || `${process.env.HOME}/.cursor-bridge/workspace`,
   // 'ask' = read-only Q&A, 'plan' = read-only planning, '' = full agent (can edit files/run commands)
   mode: process.env.CURSOR_MODE || "",
+  // Isolate edits in a temporary git worktree (stored under ~/.cursor/worktrees)
+  // Equivalent to `cursor agent --worktree`
+  worktree: process.env.CURSOR_WORKTREE === "true",
   timeoutMs: parseInt(process.env.BRIDGE_TIMEOUT_MS || "300000"), // 5 minutes
   // Maximum prompt length (chars) to pass as CLI argument.
   // Linux MAX_ARG_STRLEN = 131072 bytes; with multi-byte chars (Chinese = 3 bytes/char)
@@ -54,6 +100,40 @@ const SUPPORTED_MODELS = [
 const CURSOR_NATIVE_TOOLS = new Set([
   "read", "write", "edit", "exec", "process", "browser",
 ]);
+
+/**
+ * Merge assistant text segments with overlap/duplicate detection.
+ * Handles: exact duplicates, cumulative re-emissions, shorter re-emissions,
+ * non-adjacent duplicates (via seen set), and independent segments.
+ */
+function mergeAssistantSegments(segments) {
+  if (!segments.length) return "";
+  let result = segments[0];
+  const seen = new Set([segments[0].trim()]);
+  for (let i = 1; i < segments.length; i++) {
+    const seg = segments[i];
+    const trimSeg = seg.trim();
+    if (!trimSeg || seg === result) {
+      // Empty or exact duplicate of current result — skip
+    } else if (seg.startsWith(result)) {
+      // Cumulative: new segment is a superset of current result
+      result = seg;
+      seen.add(trimSeg);
+    } else if (result.startsWith(seg)) {
+      // Shorter re-emission (e.g. cursor-agent clean final) — skip
+    } else if (result.endsWith(trimSeg)) {
+      // Trailing duplicate — skip (result already ends with this text)
+    } else if (seen.has(trimSeg)) {
+      // Non-adjacent duplicate — skip (we saw this exact text earlier)
+      console.log(`  [mergeSegments] skipped non-adjacent duplicate (${trimSeg.length} chars)`);
+    } else {
+      // Truly independent segment — append
+      result += seg;
+      seen.add(trimSeg);
+    }
+  }
+  return result;
+}
 
 // Regex to extract <tool_call> blocks from model output
 const TOOL_CALL_REGEX = /<tool_call>\s*(\{[\s\S]*?\})\s*<\/tool_call>/g;
@@ -119,6 +199,73 @@ function parseToolCalls(text) {
 }
 
 /**
+ * Remove text duplication from a buffer.
+ * Handles multiple patterns:
+ *   1. Exact 50% split (text repeated twice, with optional whitespace)
+ *   2. Opening block repeated at the end (greeting + reasoning + greeting)
+ *   3. Paragraph-level consecutive duplicates
+ */
+function deduplicateBuffer(text) {
+  if (!text || text.length < 2) return text;
+  const trimmed = text.trim();
+  if (!trimmed) return text;
+
+  const len = trimmed.length;
+
+  // 1. Check for exact duplication: text repeated twice (40-60% split)
+  for (let splitPoint = Math.floor(len * 0.4); splitPoint <= Math.ceil(len * 0.6); splitPoint++) {
+    const first = trimmed.substring(0, splitPoint).trim();
+    const second = trimmed.substring(splitPoint).trim();
+    if (first && first === second) {
+      return first;
+    }
+  }
+
+  // 2. Check if the opening block (first meaningful chunk) repeats later in the text.
+  //    This catches: "greeting + reasoning/meta-text + greeting" where
+  //    the model re-generates its answer after internal processing.
+  const MIN_BLOCK = 15;
+  const lines = trimmed.split("\n");
+  if (lines.length >= 2) {
+    // Try progressively larger opening blocks (1 line, 2 lines, …)
+    for (let blockLines = 1; blockLines <= Math.min(lines.length - 1, 5); blockLines++) {
+      const opening = lines.slice(0, blockLines).join("\n").trim();
+      if (opening.length < MIN_BLOCK) continue;
+
+      // Search for an exact repeat of the opening block after the first occurrence
+      const afterFirst = trimmed.indexOf(opening) + opening.length;
+      const repeatIdx = trimmed.indexOf(opening, afterFirst);
+      if (repeatIdx > 0) {
+        // Keep only up to where the repeat starts (trim intermediate reasoning)
+        const kept = trimmed.substring(repeatIdx).trim();
+        console.log(`  [dedup] removed repeated opening block (${opening.length} chars, repeat at offset ${repeatIdx})`);
+        return kept;
+      }
+    }
+  }
+
+  // 3. Remove consecutive duplicate paragraphs
+  const paragraphs = trimmed.split(/\n\n+/);
+  if (paragraphs.length >= 2) {
+    const unique = [paragraphs[0]];
+    let changed = false;
+    for (let i = 1; i < paragraphs.length; i++) {
+      if (paragraphs[i].trim() === paragraphs[i - 1].trim()) {
+        changed = true;
+        continue;
+      }
+      unique.push(paragraphs[i]);
+    }
+    if (changed) {
+      console.log(`  [dedup] removed ${paragraphs.length - unique.length} duplicate paragraph(s)`);
+      return unique.join("\n\n");
+    }
+  }
+
+  return trimmed;
+}
+
+/**
  * Check if the model output contains tool_call blocks (even partially).
  */
 function hasToolCalls(text) {
@@ -133,7 +280,7 @@ function hasToolCalls(text) {
 function toolsToPromptSection(tools) {
   if (!tools?.length) return "";
 
-  let section = "\n<openclaw_tools>\nAvailable tools:\n";
+  let section = "\n<available_tools>\nAvailable tools:\n";
 
   for (const tool of tools) {
     const fn = tool.function || tool;
@@ -153,7 +300,7 @@ function toolsToPromptSection(tools) {
     section += `- ${name}: ${desc.slice(0, 300)}${argsDesc}\n`;
   }
 
-  section += "</openclaw_tools>\n";
+  section += "</available_tools>\n";
   return section;
 }
 
@@ -347,19 +494,26 @@ function runCursorAgent(prompt, requestModel, stream, res, tools) {
   const isDirectAgent = CONFIG.cursorBin.includes("cursor-agent");
   const args = isDirectAgent ? ["--print", "--force"] : ["agent", "--print", "--force"];
   args.push("--model", model);
-  // Use stream-json for structured output with partial streaming
-  args.push("--output-format", "stream-json");
-  args.push("--stream-partial-output");
-  args.push("--workspace", CONFIG.workspace);
-
   // When tools are provided, use --mode ask to prevent cursor-agent from
   // executing its own tools. The model will output <tool_call> blocks instead,
   // which we parse and return as OpenAI tool_calls format.
   const toolBridgeMode = tools?.length > 0;
+
+  args.push("--output-format", "stream-json");
+  // In tool bridge mode we buffer all output to parse <tool_call> blocks,
+  // so partial streaming adds no value and risks dedup-related doubling.
+  if (!toolBridgeMode) {
+    args.push("--stream-partial-output");
+  }
+  args.push("--workspace", CONFIG.workspace);
   if (toolBridgeMode) {
     args.push("--mode", "ask");
   } else if (CONFIG.mode) {
     args.push("--mode", CONFIG.mode);
+  }
+  // Isolate edits in a temporary git worktree (edits stored under ~/.cursor/worktrees)
+  if (CONFIG.worktree) {
+    args.push("--worktree");
   }
 
   // Decide how to pass the prompt
@@ -441,9 +595,9 @@ function runCursorAgent(prompt, requestModel, stream, res, tools) {
 
     // Buffer for tool bridge mode — we need to collect full output to detect tool_calls
     let toolBridgeBuffer = "";
-    // Track accumulated assistant text to deduplicate.
-    // --stream-partial-output causes cursor-agent to emit token deltas AND
-    // a final complete message; without dedup the output is doubled.
+    // In tool bridge mode, collect raw segments for robust dedup on close.
+    // In non-tool-bridge mode, use inline dedup with the accumulator.
+    let assistantSegments = [];
     let assistantAccum = "";
 
     // Send role delta first
@@ -477,15 +631,19 @@ function runCursorAgent(prompt, requestModel, stream, res, tools) {
           event = JSON.parse(line);
         } catch {
           // Not JSON — treat as raw text (fallback)
-          const textEvent = {
-            id: requestId,
-            object: "chat.completion.chunk",
-            created,
-            model: modelName,
-            choices: [{ index: 0, delta: { content: line }, finish_reason: null }],
-          };
-          res.write(`data: ${JSON.stringify(textEvent)}\n\n`);
           outputChars += line.length;
+          if (toolBridgeMode) {
+            toolBridgeBuffer += line;
+          } else {
+            const textEvent = {
+              id: requestId,
+              object: "chat.completion.chunk",
+              created,
+              model: modelName,
+              choices: [{ index: 0, delta: { content: line }, finish_reason: null }],
+            };
+            res.write(`data: ${JSON.stringify(textEvent)}\n\n`);
+          }
           continue;
         }
 
@@ -511,24 +669,25 @@ function runCursorAgent(prompt, requestModel, stream, res, tools) {
           }
 
           if (textChunk) {
-            // Deduplicate: --stream-partial-output emits token deltas followed
-            // by a final assistant event containing the full accumulated text.
-            // Detect the final duplicate and skip it.
-            let delta = textChunk;
-            if (assistantAccum.length > 0 && textChunk === assistantAccum) {
-              delta = "";
-            } else if (assistantAccum.length > 0 && textChunk.startsWith(assistantAccum)) {
-              delta = textChunk.slice(assistantAccum.length);
-              assistantAccum = textChunk;
+            if (toolBridgeMode) {
+              // Collect raw segments; dedup happens on close for robustness.
+              assistantSegments.push(textChunk);
+              console.log(
+                `  [${requestId.slice(-8)}] assistant seg#${assistantSegments.length}: len=${textChunk.length} preview="${textChunk.slice(0, 80).replace(/\n/g, "\\n")}"`
+              );
             } else {
-              assistantAccum += textChunk;
-            }
-
-            if (delta) {
-              outputChars += delta.length;
-              if (toolBridgeMode) {
-                toolBridgeBuffer += delta;
+              // Inline dedup for non-tool-bridge streaming
+              let delta = textChunk;
+              if (assistantAccum.length > 0 && textChunk === assistantAccum) {
+                delta = "";
+              } else if (assistantAccum.length > 0 && textChunk.startsWith(assistantAccum)) {
+                delta = textChunk.slice(assistantAccum.length);
+                assistantAccum = textChunk;
               } else {
+                assistantAccum = textChunk;
+              }
+              if (delta) {
+                outputChars += delta.length;
                 const sseEvent = {
                   id: requestId,
                   object: "chat.completion.chunk",
@@ -542,9 +701,10 @@ function runCursorAgent(prompt, requestModel, stream, res, tools) {
           }
         } else if (type === "tool_call") {
           toolCallCount++;
-          // Reset accumulator: cursor-agent tool usage splits the output
-          // into separate text segments, each with its own final event.
-          assistantAccum = "";
+          // Do NOT reset assistantAccum here. cursor-agent may re-emit
+          // the same assistant text after internal tool calls (especially in
+          // --mode ask where reads still emit tool_call events). Keeping the
+          // accumulator intact allows the dedup logic to catch re-emitted text.
           if (subtype === "started") {
             const toolName = Object.keys(event.tool_call || {})[0] || "unknown";
             console.log(
@@ -573,7 +733,7 @@ function runCursorAgent(prompt, requestModel, stream, res, tools) {
         } catch {
           if (lineBuffer.trim()) {
             if (toolBridgeMode) {
-              toolBridgeBuffer += lineBuffer;
+              assistantSegments.push(lineBuffer);
             } else {
               const textEvent = {
                 id: requestId,
@@ -590,6 +750,19 @@ function runCursorAgent(prompt, requestModel, stream, res, tools) {
       }
 
       const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+
+      // In tool bridge mode, merge collected segments with dedup
+      if (toolBridgeMode && assistantSegments.length > 0) {
+        // Prepend any raw (non-JSON) text that was already buffered
+        if (toolBridgeBuffer.trim()) {
+          assistantSegments.unshift(toolBridgeBuffer);
+        }
+        toolBridgeBuffer = mergeAssistantSegments(assistantSegments);
+        outputChars = toolBridgeBuffer.length;
+        console.log(
+          `  [${requestId.slice(-8)}] merged ${assistantSegments.length} segments → ${toolBridgeBuffer.length} chars`
+        );
+      }
       const usage = buildUsage();
 
       // In tool bridge mode, check if the buffered output contains tool_calls
@@ -642,13 +815,19 @@ function runCursorAgent(prompt, requestModel, stream, res, tools) {
           return;
         }
         // No tool calls found — send the buffered text as normal content
-        if (toolBridgeBuffer.trim()) {
+        const dedupedText = deduplicateBuffer(toolBridgeBuffer);
+        if (dedupedText !== toolBridgeBuffer) {
+          console.log(
+            `  [${requestId.slice(-8)}] deduplicateBuffer: ${toolBridgeBuffer.length} → ${dedupedText.length} chars`
+          );
+        }
+        if (dedupedText) {
           const textEvent = {
             id: requestId,
             object: "chat.completion.chunk",
             created,
             model: modelName,
-            choices: [{ index: 0, delta: { content: toolBridgeBuffer }, finish_reason: null }],
+            choices: [{ index: 0, delta: { content: dedupedText }, finish_reason: null }],
           };
           res.write(`data: ${JSON.stringify(textEvent)}\n\n`);
         }
@@ -744,7 +923,7 @@ function runCursorAgent(prompt, requestModel, stream, res, tools) {
               delta = textChunk.slice(assistantAccumNS.length);
               assistantAccumNS = textChunk;
             } else {
-              assistantAccumNS += textChunk;
+              assistantAccumNS = textChunk;
             }
             if (delta) {
               fullOutput += delta;
@@ -753,7 +932,6 @@ function runCursorAgent(prompt, requestModel, stream, res, tools) {
           }
         } else if (type === "tool_call") {
           toolCallCount++;
-          assistantAccumNS = "";
         } else if (type === "result") {
           resultDurationMs = event.duration_ms || 0;
           isError = event.is_error || event.subtype === "error";
@@ -798,7 +976,7 @@ function runCursorAgent(prompt, requestModel, stream, res, tools) {
         return;
       }
 
-      const responseText = fullOutput.trim();
+      const responseText = toolBridgeMode ? deduplicateBuffer(fullOutput) : fullOutput.trim();
       const usage = buildUsage();
 
       // Check if the model output contains <tool_call> blocks (Tool Bridge Mode)
@@ -999,27 +1177,27 @@ const server = createServer(async (req, res) => {
 
 server.listen(CONFIG.port, CONFIG.host, () => {
   const modeLabel = CONFIG.mode || "agent (full capabilities)";
+  const logPath = join(LOG_DIR, `cursor-bridge.${todayStamp()}.log`);
+  const authLabel = process.env.CURSOR_API_KEY
+    ? "CURSOR_API_KEY"
+    : process.env.CURSOR_AUTH_TOKEN
+    ? "CURSOR_AUTH_TOKEN"
+    : "cursor agent login";
   console.log(`
 ┌──────────────────────────────────────────────────────────┐
-│              cursor-bridge v1.1.0                        │
+│              cursor-bridge v1.2.0                        │
 │    OpenAI-compatible API  →  Cursor CLI Agent            │
 ├──────────────────────────────────────────────────────────┤
 │  Endpoint:   http://${CONFIG.host}:${CONFIG.port}/v1/chat/completions  │
 │  Model:      ${CONFIG.cursorModel.padEnd(43)}│
 │  Mode:       ${modeLabel.padEnd(43)}│
+│  Worktree:   ${(CONFIG.worktree ? "enabled" : "disabled").padEnd(43)}│
+│  Auth:       ${authLabel.padEnd(43)}│
 │  Workspace:  ${CONFIG.workspace.slice(-43).padEnd(43)}│
 │  Timeout:    ${(CONFIG.timeoutMs / 1000 + "s").padEnd(43)}│
+│  Log:        ${logPath.slice(-43).padEnd(43)}│
 │  Output:     stream-json + stream-partial-output         │
 │  MaxArgLen:  ${(CONFIG.maxArgLen + " chars").padEnd(43)}│
-├──────────────────────────────────────────────────────────┤
-│  OpenClaw baseUrl: http://${CONFIG.host}:${CONFIG.port}/v1${" ".repeat(19)}│
-│                                                          │
-│  v1.1 improvements:                                      │
-│    ✓ Usage estimation in streaming responses             │
-│    ✓ Tools awareness (non-native → prompt injection)     │
-│    ✓ Structured error types (context_overflow, etc.)     │
-│    ✓ Thinking token tracking                             │
-│    ✓ stdin pipe for large prompts (E2BIG fix)            │
 └──────────────────────────────────────────────────────────┘
   `);
 });

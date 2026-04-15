@@ -4,29 +4,33 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PIDFILE="$SCRIPT_DIR/cursor-bridge.pid"
 
-if [ -f "$PIDFILE" ]; then
-    PID=$(cat "$PIDFILE")
-    if kill -0 "$PID" 2>/dev/null; then
-        echo "Stopping cursor-bridge (PID $PID)..."
-        kill "$PID"
-        sleep 2
-        if kill -0 "$PID" 2>/dev/null; then
-            echo "Force killing..."
-            kill -9 "$PID"
-        fi
-        echo "✓ Stopped"
-    else
-        echo "Process $PID not running"
-    fi
+# 用 pgrep 找出所有實例（不依賴 PID 文件）
+PIDS=$(pgrep -f "cursor-bridge.mjs" 2>/dev/null)
+
+if [ -z "$PIDS" ]; then
+    echo "cursor-bridge is not running"
     rm -f "$PIDFILE"
-else
-    echo "No PID file found. Checking for running processes..."
-    PIDS=$(pgrep -f "cursor-bridge.mjs" 2>/dev/null)
-    if [ -n "$PIDS" ]; then
-        echo "Found processes: $PIDS"
-        kill $PIDS
-        echo "✓ Stopped"
-    else
-        echo "cursor-bridge is not running"
-    fi
+    exit 0
 fi
+
+echo "Stopping cursor-bridge (PID(s): $PIDS)..."
+kill $PIDS
+
+# 等待最多 5 秒讓進程正常退出
+for i in $(seq 1 5); do
+    sleep 1
+    REMAINING=$(pgrep -f "cursor-bridge.mjs" 2>/dev/null)
+    if [ -z "$REMAINING" ]; then
+        break
+    fi
+done
+
+# 仍有殘留則強制終止
+REMAINING=$(pgrep -f "cursor-bridge.mjs" 2>/dev/null)
+if [ -n "$REMAINING" ]; then
+    echo "Force killing (PID(s): $REMAINING)..."
+    kill -9 $REMAINING
+fi
+
+rm -f "$PIDFILE"
+echo "✓ Stopped"
