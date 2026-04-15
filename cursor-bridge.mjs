@@ -1,12 +1,18 @@
 #!/usr/bin/env node
 /**
- * cursor-bridge v1.4 — OpenAI-compatible API proxy for Cursor CLI
+ * cursor-bridge v1.5 — OpenAI-compatible API proxy for Cursor CLI
  *
  * 架構:
  *   Any OpenAI-compatible client  ──(OpenAI API)──►  cursor-bridge (port 18790)  ──►  cursor-agent --print --stream-json
  *
  * 這個代理伺服器提供 OpenAI 相容的 API 格式，
  * 讓任何支援 OpenAI API 的用戶端可以呼叫 Cursor CLI 的 AI 模型。
+ *
+ * v1.5 改進:
+ *   - 修復 Tool Bridge Mode：改用 gpt-5.3-codex-low 作為預設工具橋接模型
+ *   - Claude 系模型將 <tool_calling_protocol> 視為 prompt injection 拒絕配合
+ *   - gpt-5.3-codex-low 穩定輸出 <tool_call> blocks 並正確處理多輪工具循環
+ *   - 新增 CURSOR_TOOL_BRIDGE_MODEL 環境變數（預設 gpt-5.3-codex-low）
  *
  * v1.4 改進:
  *   - 修復 Tool Bridge Mode 的工具調用問題：正確設定 tool-calling protocol
@@ -115,6 +121,12 @@ const CONFIG = {
   // Verbose logging: log full request/response bodies and cursor-cli I/O
   // Set BRIDGE_VERBOSE=false to disable (defaults to true)
   verbose: process.env.BRIDGE_VERBOSE !== "false",
+  // Tool Bridge Model: Claude and other thinking models refuse <tool_call> blocks as
+  // "prompt injection". gpt-5.3-codex-low reliably outputs <tool_call> blocks and
+  // handles the tool loop correctly. This model is used automatically when tools are
+  // present in the request (Tool Bridge Mode), overriding the request model.
+  // Set CURSOR_TOOL_BRIDGE_MODEL="" to disable override (use request model instead).
+  toolBridgeModel: process.env.CURSOR_TOOL_BRIDGE_MODEL ?? "gpt-5.3-codex-low",
 };
 
 // Cache for available Cursor models (populated on first request)
@@ -588,6 +600,20 @@ function runCursorAgent(prompt, requestModel, stream, res, tools) {
     const bare = requestModel.replace(/^(?:bridge-cursor-cli|cursor)\//, "");
     if (bare) model = bare;
   }
+
+  // Tool Bridge Mode: when tools are present, override the model with toolBridgeModel.
+  // Claude-based models (claude-4.6-*, etc.) refuse our <tool_calling_protocol> as
+  // "prompt injection" and never output <tool_call> blocks. gpt-5.3-codex-low
+  // (and similar codex models) reliably follow the protocol.
+  const toolBridgeMode = tools?.length > 0;
+  if (toolBridgeMode && CONFIG.toolBridgeModel) {
+    const originalModel = model;
+    model = CONFIG.toolBridgeModel;
+    console.log(
+      `  [tool-bridge] overriding model ${originalModel} → ${model} (CURSOR_TOOL_BRIDGE_MODEL)`
+    );
+  }
+
   const modelName = `cursor/${model}`;
 
   // Build cursor agent arguments
@@ -597,7 +623,6 @@ function runCursorAgent(prompt, requestModel, stream, res, tools) {
   // When tools are provided, use --mode ask to prevent cursor-agent from
   // executing its own tools. The model will output <tool_call> blocks instead,
   // which we parse and return as OpenAI tool_calls format.
-  const toolBridgeMode = tools?.length > 0;
 
   args.push("--output-format", "stream-json");
   // In tool bridge mode we buffer all output to parse <tool_call> blocks,
@@ -1323,7 +1348,7 @@ server.listen(CONFIG.port, CONFIG.host, () => {
     : "cursor agent login";
   console.log(`
 ┌──────────────────────────────────────────────────────────┐
-│              cursor-bridge v1.4.0                        │
+│              cursor-bridge v1.5.0                        │
 │    OpenAI-compatible API  →  Cursor CLI Agent            │
 ├──────────────────────────────────────────────────────────┤
 │  Endpoint:   http://${CONFIG.host}:${CONFIG.port}/v1/chat/completions  │
@@ -1335,6 +1360,7 @@ server.listen(CONFIG.port, CONFIG.host, () => {
 │  Timeout:    ${(CONFIG.timeoutMs / 1000 + "s").padEnd(43)}│
 │  Log:        ${logPath.slice(-43).padEnd(43)}│
 │  Verbose:    ${(CONFIG.verbose ? "on (BRIDGE_VERBOSE=false to disable)" : "off").padEnd(43)}│
+│  ToolBridge: ${(CONFIG.toolBridgeModel || "disabled (use request model)").padEnd(43)}│
 │  Output:     stream-json + stream-partial-output         │
 │  MaxArgLen:  ${(CONFIG.maxArgLen + " chars").padEnd(43)}│
 └──────────────────────────────────────────────────────────┘
