@@ -27,6 +27,11 @@
 
 **運作原理：** cursor-bridge 提供一個 OpenAI 相容的 API（`/v1/chat/completions`）。當用戶端發送請求時，bridge 會將其轉譯成 `cursor agent --print --output-format stream-json` 指令並串流回傳結果。零外部依賴 — 只使用 Node.js 內建模組。
 
+## v1.3 更新內容
+
+- **動態模型探索** — `GET /v1/models` 和 `GET /v1/cursor-models` 首次請求時自動探測 Cursor CLI，回傳你的訂閱方案下真正可用的模型清單。結果快取在 process 記憶體中，後續呼叫瞬間回應。
+- **Workspace 目錄說明** — 啟動前 workspace 目錄（`~/.cursor-bridge/workspace`）必須存在。`install.sh` 會自動建立；手動設定時請執行 `mkdir -p ~/.cursor-bridge/workspace`。
+
 ## v1.2 更新內容
 
 - **每日 log 輪轉** — 寫入 `logs/cursor-bridge.yyyyMMdd.log`，一天一份，午夜自動切換，無需重啟。
@@ -117,9 +122,13 @@ tail -f logs/cursor-bridge.$(date +%Y%m%d).log
 ```bash
 curl http://127.0.0.1:18790/health
 
+# 查詢可用模型清單
+curl http://127.0.0.1:18790/v1/cursor-models
+
+# 發送聊天請求
 curl http://127.0.0.1:18790/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model":"opus-4.6-thinking","messages":[{"role":"user","content":"你好！"}]}'
+  -d '{"model":"auto","messages":[{"role":"user","content":"你好！"}]}'
 ```
 
 ## OpenClaw 整合（可選）
@@ -169,7 +178,7 @@ openclaw gateway stop && openclaw gateway
 |------|--------|------|
 | `BRIDGE_PORT` | `18790` | 代理伺服器埠號 |
 | `BRIDGE_HOST` | `127.0.0.1` | 綁定位址 |
-| `CURSOR_MODEL` | `opus-4.6-thinking` | Cursor CLI 模型 ID |
+| `CURSOR_MODEL` | `auto` | Cursor CLI 模型 ID（用 `/v1/cursor-models` 查詢可用選項） |
 | `CURSOR_BIN` | `cursor` | `cursor` 或 `cursor-agent` 二進位檔路徑 |
 | `CURSOR_WORKSPACE` | `~/.cursor-bridge/workspace` | cursor agent 工作目錄 |
 | `CURSOR_MODE` | *（空）* | `ask`（唯讀問答）/ `plan`（唯讀規劃）/ *空* = 完整 agent |
@@ -199,15 +208,26 @@ cat logs/cursor-bridge.20260416.log
 
 ## 可用模型
 
-執行 `cursor agent --list-models` 查看你的訂閱方案下所有可用模型：
+透過 API 取得你的 Cursor 訂閱方案下即時可用的模型清單：
+
+```bash
+curl http://127.0.0.1:18790/v1/cursor-models
+```
+
+Bridge 首次呼叫時自動探測 Cursor CLI 並快取結果。常見模型範例：
 
 | 模型 ID | 說明 |
 |---------|------|
-| `opus-4.6-thinking` | Claude 4.6 Opus（含延伸思考）— **推薦** |
-| `opus-4.6` | Claude 4.6 Opus |
-| `sonnet-4.6-thinking` | Claude 4.6 Sonnet（含延伸思考） |
-| `gpt-5.2-codex-high` | GPT-5.2 Codex High |
-| `gemini-3-pro` | Gemini 3 Pro |
+| `auto` | 讓 Cursor 自動選擇最佳模型 — **推薦** |
+| `claude-4.6-opus-high-thinking` | Claude 4.6 Opus，高預算 + 延伸思考 |
+| `claude-4.6-opus-max-thinking` | Claude 4.6 Opus，最高預算 + 延伸思考 |
+| `claude-4.6-sonnet-medium-thinking` | Claude 4.6 Sonnet（含延伸思考） |
+| `composer-2` | Cursor Composer 2 |
+| `gpt-5.3-codex` | GPT-5.3 Codex |
+| `gpt-5.2` | GPT-5.2 |
+| `gemini-3.1-pro` | Gemini 3.1 Pro |
+
+> 可用模型視你的 Cursor 訂閱方案而定，API 只回傳你的帳號實際可使用的模型。
 
 在 `.env` 中設定 `CURSOR_MODEL` 並重啟，或在每次請求的 `model` 欄位直接指定。
 
@@ -216,21 +236,25 @@ cat logs/cursor-bridge.20260416.log
 | 端點 | 方法 | 說明 |
 |------|------|------|
 | `/health` | GET | 健康檢查 |
-| `/v1/models` | GET | 列出可用模型 |
+| `/v1/models` | GET | 列出可用的 Cursor 模型（探測 CLI，結果快取） |
+| `/v1/cursor-models` | GET | `/v1/models` 的別名 |
 | `/v1/chat/completions` | POST | 聊天補全（支援串流與非串流） |
 
 ### 範例
 
 ```bash
+# 查詢可用模型清單
+curl http://127.0.0.1:18790/v1/cursor-models
+
 # 非串流
 curl http://127.0.0.1:18790/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model":"opus-4.6-thinking","messages":[{"role":"user","content":"你好！"}]}'
+  -d '{"model":"auto","messages":[{"role":"user","content":"你好！"}]}'
 
 # 串流
 curl http://127.0.0.1:18790/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model":"opus-4.6-thinking","messages":[{"role":"user","content":"你好！"}],"stream":true}'
+  -d '{"model":"auto","messages":[{"role":"user","content":"你好！"}],"stream":true}'
 ```
 
 ## 解除安裝

@@ -89,12 +89,62 @@ const CONFIG = {
   charsPerToken: parseFloat(process.env.BRIDGE_CHARS_PER_TOKEN || "3.0"),
 };
 
-// Supported models that this bridge can serve
-// These are advertised via GET /v1/models and used for dynamic model switching
-const SUPPORTED_MODELS = [
-  { id: "opus-4.6-thinking", name: "Claude 4.6 Opus (Thinking)" },
-  { id: "sonnet-4.6-thinking", name: "Claude 4.6 Sonnet (Thinking)" },
-];
+// Cache for available Cursor models (populated on first request)
+let _cachedModels = null;
+
+/**
+ * Probe the Cursor CLI for available model names by intentionally using
+ * an invalid model name and parsing the "Available models: ..." from stderr.
+ * Result is cached after the first successful probe.
+ */
+function probeAvailableModels() {
+  return new Promise((resolve) => {
+    if (_cachedModels) {
+      resolve(_cachedModels);
+      return;
+    }
+
+    const isDirectAgent = CONFIG.cursorBin.includes("cursor-agent");
+    const args = isDirectAgent
+      ? ["--model", "__probe__", "--print", "--force", "--output-format", "stream-json", "--workspace", CONFIG.workspace, "x"]
+      : ["agent", "--model", "__probe__", "--print", "--force", "--output-format", "stream-json", "--workspace", CONFIG.workspace, "x"];
+
+    const proc = spawn(CONFIG.cursorBin, args, {
+      env: { ...process.env },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    proc.stdin.end();
+
+    let stderr = "";
+    proc.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+
+    const timer = setTimeout(() => { proc.kill("SIGTERM"); }, 10000);
+
+    proc.on("close", () => {
+      clearTimeout(timer);
+      // Parse "Available models: model1, model2, ..." from stderr
+      const match = stderr.match(/Available models:\s*([^\n]+)/i);
+      if (match) {
+        const models = match[1]
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+        _cachedModels = models;
+        console.log(`[cursor-bridge] Probed ${models.length} available models from Cursor CLI`);
+        resolve(models);
+      } else {
+        // Probe failed — return empty list (don't cache so next request retries)
+        console.warn("[cursor-bridge] Could not probe available models from Cursor CLI");
+        resolve([]);
+      }
+    });
+
+    proc.on("error", () => {
+      clearTimeout(timer);
+      resolve([]);
+    });
+  });
+}
 
 // Tools that cursor-agent already has natively (no need to inject)
 const CURSOR_NATIVE_TOOLS = new Set([
@@ -1102,18 +1152,22 @@ const server = createServer(async (req, res) => {
     return;
   }
 
-  // ── GET /v1/models ──
-  if (url.pathname === "/v1/models" && req.method === "GET") {
+  // ── GET /v1/models  or  GET /v1/cursor-models ──
+  if (
+    (url.pathname === "/v1/models" || url.pathname === "/v1/cursor-models") &&
+    req.method === "GET"
+  ) {
+    const models = await probeAvailableModels();
+    const now = Math.floor(Date.now() / 1000);
     res.writeHead(200, {
       "Content-Type": "application/json",
       "Access-Control-Allow-Origin": "*",
     });
-    const now = Math.floor(Date.now() / 1000);
     res.end(
       JSON.stringify({
         object: "list",
-        data: SUPPORTED_MODELS.map((m) => ({
-          id: m.id,
+        data: models.map((id) => ({
+          id,
           object: "model",
           created: now,
           owned_by: "cursor",

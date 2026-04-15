@@ -27,6 +27,11 @@ Any OpenAI-compatible client
 
 **How it works:** cursor-bridge exposes an OpenAI-compatible API (`/v1/chat/completions`). When a client sends a request, the bridge translates it into a `cursor agent --print --output-format stream-json` call and streams the response back. Zero external dependencies — pure Node.js built-in modules.
 
+## What's New in v1.3
+
+- **Dynamic model discovery** — `GET /v1/models` and `GET /v1/cursor-models` now probe the Cursor CLI on first request and return the real list of models available under your subscription. Result is cached for the process lifetime, so subsequent calls are instant.
+- **Workspace auto-setup** — The workspace directory (`~/.cursor-bridge/workspace`) must exist before starting. `install.sh` creates it automatically. If you set up manually, run `mkdir -p ~/.cursor-bridge/workspace`.
+
 ## What's New in v1.2
 
 - **Daily log rotation** — Logs written to `logs/cursor-bridge.yyyyMMdd.log`, one file per day. Auto-rotates at midnight without restart.
@@ -117,9 +122,13 @@ tail -f logs/cursor-bridge.$(date +%Y%m%d).log
 ```bash
 curl http://127.0.0.1:18790/health
 
+# List available models
+curl http://127.0.0.1:18790/v1/cursor-models
+
+# Send a chat request
 curl http://127.0.0.1:18790/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model":"opus-4.6-thinking","messages":[{"role":"user","content":"Hello!"}]}'
+  -d '{"model":"auto","messages":[{"role":"user","content":"Hello!"}]}'
 ```
 
 ## OpenClaw Integration (Optional)
@@ -169,7 +178,7 @@ All configuration is via environment variables (or `.env` file):
 |----------|---------|-------------|
 | `BRIDGE_PORT` | `18790` | Port for the proxy server |
 | `BRIDGE_HOST` | `127.0.0.1` | Bind address |
-| `CURSOR_MODEL` | `opus-4.6-thinking` | Cursor CLI model ID |
+| `CURSOR_MODEL` | `auto` | Cursor CLI model ID (use `/v1/cursor-models` to list options) |
 | `CURSOR_BIN` | `cursor` | Path to `cursor` or `cursor-agent` binary |
 | `CURSOR_WORKSPACE` | `~/.cursor-bridge/workspace` | Workspace for cursor agent |
 | `CURSOR_MODE` | *(empty)* | `ask` (read-only) / `plan` / *(empty)* = full agent |
@@ -199,38 +208,53 @@ The log stream auto-rotates at midnight without requiring a restart.
 
 ## Available Models
 
-Run `cursor agent --list-models` to see all models available under your subscription:
+Query the bridge to get the live list of models available under your Cursor subscription:
+
+```bash
+curl http://127.0.0.1:18790/v1/cursor-models
+```
+
+The bridge probes the Cursor CLI on the first call and caches the result. Example models you may see:
 
 | Model ID | Description |
 |----------|-------------|
-| `opus-4.6-thinking` | Claude 4.6 Opus with extended thinking — **recommended** |
-| `opus-4.6` | Claude 4.6 Opus |
-| `sonnet-4.6-thinking` | Claude 4.6 Sonnet with extended thinking |
-| `gpt-5.2-codex-high` | GPT-5.2 Codex High |
-| `gemini-3-pro` | Gemini 3 Pro |
+| `auto` | Let Cursor pick the best model — **recommended** |
+| `claude-4.6-opus-high-thinking` | Claude 4.6 Opus, high budget + extended thinking |
+| `claude-4.6-opus-max-thinking` | Claude 4.6 Opus, max budget + extended thinking |
+| `claude-4.6-sonnet-medium-thinking` | Claude 4.6 Sonnet with extended thinking |
+| `composer-2` | Cursor Composer 2 |
+| `gpt-5.3-codex` | GPT-5.3 Codex |
+| `gpt-5.2` | GPT-5.2 |
+| `gemini-3.1-pro` | Gemini 3.1 Pro |
 
-Change the model by setting `CURSOR_MODEL` in `.env` and restarting, or pass the `model` field in each API request for per-request switching.
+> Model availability depends on your Cursor subscription plan. The API returns only what your account can actually use.
+
+Change the default model by setting `CURSOR_MODEL` in `.env` and restarting, or pass `model` in each API request for per-request switching.
 
 ## API Endpoints
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/health` | GET | Health check |
-| `/v1/models` | GET | List available models |
+| `/v1/models` | GET | List available Cursor models (probed from CLI, cached) |
+| `/v1/cursor-models` | GET | Alias for `/v1/models` |
 | `/v1/chat/completions` | POST | Chat completions (streaming & non-streaming) |
 
-### Example
+### Examples
 
 ```bash
+# List available models
+curl http://127.0.0.1:18790/v1/cursor-models
+
 # Non-streaming
 curl http://127.0.0.1:18790/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model":"opus-4.6-thinking","messages":[{"role":"user","content":"Hello!"}]}'
+  -d '{"model":"auto","messages":[{"role":"user","content":"Hello!"}]}'
 
 # Streaming
 curl http://127.0.0.1:18790/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model":"opus-4.6-thinking","messages":[{"role":"user","content":"Hello!"}],"stream":true}'
+  -d '{"model":"auto","messages":[{"role":"user","content":"Hello!"}],"stream":true}'
 ```
 
 ## Uninstall
