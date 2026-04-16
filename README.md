@@ -27,6 +27,11 @@ Any OpenAI-compatible client
 
 **How it works:** cursor-bridge exposes an OpenAI-compatible API (`/v1/chat/completions`). When a client sends a request, the bridge translates it into a `cursor agent --print --output-format stream-json` call and streams the response back. Zero external dependencies — pure Node.js built-in modules.
 
+## What's New in v1.5
+
+- **Tool Bridge Mode fix** — Auto-switches to `gpt-5.3-codex-high` when `tools` are present in the request. Claude-based models (`claude-4.6-*`, etc.) classify the injected `<tool_calling_protocol>` as a "prompt injection attack" and refuse to output `<tool_call>` blocks. `gpt-5.3-codex-high` reliably follows the protocol and handles multi-turn tool loops correctly.
+- **`CURSOR_TOOL_BRIDGE_MODEL`** — New env var to override the tool bridge model (default: `gpt-5.3-codex-high`). Set to `""` to disable and use the request model instead.
+
 ## What's New in v1.4
 
 - **Hermes Agent model sync** — `set-hermesagent.sh` now probes all available models from cursor-bridge and writes them into Hermes `custom_providers`, so `/model` → `bridge-cursor-cli` shows the full model list (80+ models) instead of just one.
@@ -198,7 +203,8 @@ All configuration is via environment variables (or `.env` file):
 |----------|---------|-------------|
 | `BRIDGE_PORT` | `18790` | Port for the proxy server |
 | `BRIDGE_HOST` | `127.0.0.1` | Bind address |
-| `CURSOR_MODEL` | `auto` | Cursor CLI model ID (use `/v1/cursor-models` to list options) |
+| `CURSOR_MODEL` | `auto` | Default model for requests without `tools` |
+| `CURSOR_TOOL_BRIDGE_MODEL` | `gpt-5.3-codex-high` | Model used when `tools` are present. Claude models refuse tool protocols — codex models work reliably. Set `""` to disable override. |
 | `CURSOR_BIN` | `cursor` | Path to `cursor` or `cursor-agent` binary |
 | `CURSOR_WORKSPACE` | `~/.cursor-bridge/workspace` | Workspace for cursor agent |
 | `CURSOR_MODE` | *(empty)* | `ask` (read-only) / `plan` / *(empty)* = full agent |
@@ -225,6 +231,16 @@ cat logs/cursor-bridge.20260416.log
 ```
 
 The log stream auto-rotates at midnight without requiring a restart.
+
+## Recommended Models
+
+| Use case | Recommended model | Reason |
+|----------|-------------------|--------|
+| General chat / coding | `claude-4.6-opus-high-thinking` or `auto` | Best quality reasoning |
+| Tool-using agents (Hermes, etc.) | `gpt-5.3-codex-high` (**auto-selected**) | Only model that reliably outputs `<tool_call>` blocks without refusing as "prompt injection" |
+| Fast / cheap tasks | `gpt-5.3-codex-low` | Lower cost, still follows tool protocol |
+
+> **Important for tool-using agents:** Claude-based models (`claude-4.6-*`, `claude-4.*`) refuse the `<tool_calling_protocol>` instruction as a "prompt injection attack" — they will never output `<tool_call>` blocks. cursor-bridge automatically switches to `gpt-5.3-codex-high` whenever `tools` are present in the request, regardless of which model you specified.
 
 ## Available Models
 
@@ -333,14 +349,18 @@ cursor-bridge passes all environment variables to the spawned process, so whiche
 ### Tool Bridge Mode
 
 When a client sends `tools` in the API request:
-1. The bridge injects tool definitions into the prompt as `<available_tools>` XML
-2. The Cursor workspace rule (`workspace-rules/tool-bridge.mdc`) instructs the model to output `<tool_call>` XML blocks
-3. The bridge parses these and converts them to OpenAI `tool_calls` format
+1. The bridge **automatically switches to `gpt-5.3-codex-high`** (overriding the request model)
+2. Tool definitions are injected into the prompt as a `<tool_calling_protocol>` XML block
+3. The model outputs `<tool_call>` XML blocks when it needs to call a tool
+4. The bridge parses these and returns them as OpenAI `tool_calls` format
+5. The client executes the tool and sends the result back — the bridge handles the full multi-turn loop
 
-To enable Tool Bridge Mode, copy the workspace rule:
+**Why the model override?** Claude-based models detect `<tool_calling_protocol>` in user messages as a "prompt injection attack" and refuse to output `<tool_call>` blocks — this is Claude's built-in security behavior and cannot be worked around via prompting. `gpt-5.3-codex-high` reliably follows the tool protocol.
+
+Override the tool bridge model via env var:
 ```bash
-mkdir -p ~/.cursor-bridge/workspace/.cursor/rules/
-cp workspace-rules/tool-bridge.mdc ~/.cursor-bridge/workspace/.cursor/rules/
+CURSOR_TOOL_BRIDGE_MODEL=gpt-5.3-codex-low   # cheaper alternative
+CURSOR_TOOL_BRIDGE_MODEL=                     # disable override, use request model
 ```
 
 ### ACP (Agent Communication Protocol)
