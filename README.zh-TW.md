@@ -27,6 +27,11 @@
 
 **運作原理：** cursor-bridge 提供一個 OpenAI 相容的 API（`/v1/chat/completions`）。當用戶端發送請求時，bridge 會將其轉譯成 `cursor agent --print --output-format stream-json` 指令並串流回傳結果。零外部依賴 — 只使用 Node.js 內建模組。
 
+## v1.6 更新內容
+
+- **autohackmd / shell script 技能修復** — 移除 Tool Bridge 模式強制使用 `--mode ask`。v1.1 起只要請求含有 tools，cursor-bridge 就會加上 `--mode ask`，導致 cursor-agent 拒絕執行寫檔和上傳等操作。使用 `autohackmd` 等需要執行 bash 腳本的技能時，會收到「我是 Ask 模式，無法執行」的回應。v1.6 預設改為 **full agent 模式**，cursor-agent 可以原生執行 shell 指令，`autohackmd` 等技能恢復正常運作。
+- **`CURSOR_TOOL_BRIDGE_AGENT_MODE`** — 新增環境變數（預設：`""` = full agent 模式）。設為 `"ask"` 可還原舊的唯讀 ask 模式。
+
 ## v1.5 更新內容
 
 - **Tool Bridge 模式修復** — 當請求中含有 `tools` 時，自動切換到 `gpt-5.3-codex-high`。Claude 系模型（`claude-4.6-*` 等）會將注入的 `<tool_calling_protocol>` 識別為「prompt injection 攻擊」並拒絕輸出 `<tool_call>` blocks。`gpt-5.3-codex-high` 能穩定遵循協議並正確處理多輪工具循環。
@@ -205,6 +210,7 @@ openclaw gateway stop && openclaw gateway
 | `BRIDGE_HOST` | `127.0.0.1` | 綁定位址 |
 | `CURSOR_MODEL` | `auto` | 無 `tools` 的請求使用的預設模型 |
 | `CURSOR_TOOL_BRIDGE_MODEL` | `gpt-5.3-codex-high` | 有 `tools` 時使用的模型。Claude 系模型無法配合工具協議，codex 系模型可正常運作。設為 `""` 停用覆寫。 |
+| `CURSOR_TOOL_BRIDGE_AGENT_MODE` | `""` (full agent) | Tool Bridge 模式下 cursor-agent 的執行模式。預設（空字串）= full agent 模式，允許 shell/檔案執行，適合 `autohackmd` 等技能。設為 `"ask"` 還原唯讀 ask 模式。 |
 | `CURSOR_BIN` | `cursor` | `cursor` 或 `cursor-agent` 二進位檔路徑 |
 | `CURSOR_WORKSPACE` | `~/.cursor-bridge/workspace` | cursor agent 工作目錄 |
 | `CURSOR_MODE` | *（空）* | `ask`（唯讀問答）/ `plan`（唯讀規劃）/ *空* = 完整 agent |

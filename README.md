@@ -27,6 +27,11 @@ Any OpenAI-compatible client
 
 **How it works:** cursor-bridge exposes an OpenAI-compatible API (`/v1/chat/completions`). When a client sends a request, the bridge translates it into a `cursor agent --print --output-format stream-json` call and streams the response back. Zero external dependencies — pure Node.js built-in modules.
 
+## What's New in v1.6
+
+- **autohackmd / shell-script skill fix** — Removed forced `--mode ask` from Tool Bridge Mode. Previously v1.1 added `--mode ask` whenever tools were present, which prevented cursor-agent from executing write/run operations. Skills like `autohackmd` that execute bash scripts (file writes + HTTP uploads) would receive "I'm in Ask mode, I can't execute" responses. v1.6 defaults to **full agent mode**, so cursor-agent can execute shell scripts natively — `autohackmd` and similar skills now work correctly.
+- **`CURSOR_TOOL_BRIDGE_AGENT_MODE`** — New env var (default: `""` = full agent). Set to `"ask"` to restore the old read-only ask mode behaviour if needed.
+
 ## What's New in v1.5
 
 - **Tool Bridge Mode fix** — Auto-switches to `gpt-5.3-codex-high` when `tools` are present in the request. Claude-based models (`claude-4.6-*`, etc.) classify the injected `<tool_calling_protocol>` as a "prompt injection attack" and refuse to output `<tool_call>` blocks. `gpt-5.3-codex-high` reliably follows the protocol and handles multi-turn tool loops correctly.
@@ -205,6 +210,7 @@ All configuration is via environment variables (or `.env` file):
 | `BRIDGE_HOST` | `127.0.0.1` | Bind address |
 | `CURSOR_MODEL` | `auto` | Default model for requests without `tools` |
 | `CURSOR_TOOL_BRIDGE_MODEL` | `gpt-5.3-codex-high` | Model used when `tools` are present. Claude models refuse tool protocols — codex models work reliably. Set `""` to disable override. |
+| `CURSOR_TOOL_BRIDGE_AGENT_MODE` | `""` (full agent) | cursor-agent mode for tool bridge requests. Default (empty) = full agent mode, which allows shell/file execution for skills like `autohackmd`. Set `"ask"` to restore read-only ask mode. |
 | `CURSOR_BIN` | `cursor` | Path to `cursor` or `cursor-agent` binary |
 | `CURSOR_WORKSPACE` | `~/.cursor-bridge/workspace` | Workspace for cursor agent |
 | `CURSOR_MODE` | *(empty)* | `ask` (read-only) / `plan` / *(empty)* = full agent |

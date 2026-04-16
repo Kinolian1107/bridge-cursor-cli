@@ -1,12 +1,18 @@
 #!/usr/bin/env node
 /**
- * cursor-bridge v1.5 — OpenAI-compatible API proxy for Cursor CLI
+ * cursor-bridge v1.6 — OpenAI-compatible API proxy for Cursor CLI
  *
  * 架構:
  *   Any OpenAI-compatible client  ──(OpenAI API)──►  cursor-bridge (port 18790)  ──►  cursor-agent --print --stream-json
  *
  * 這個代理伺服器提供 OpenAI 相容的 API 格式，
  * 讓任何支援 OpenAI API 的用戶端可以呼叫 Cursor CLI 的 AI 模型。
+ *
+ * v1.6 改進:
+ *   - 修復 autohackmd / 需要執行 shell 指令的技能：移除 tool bridge mode 強制 --mode ask
+ *   - 原本 --mode ask 會阻止 cursor-agent 執行寫檔和上傳操作，導致 autohackmd 失效
+ *   - 預設改為 full agent mode（不加 --mode），cursor-agent 可直接執行 bash scripts
+ *   - 新增 CURSOR_TOOL_BRIDGE_AGENT_MODE 環境變數：設為 "ask" 可還原舊行為
  *
  * v1.5 改進:
  *   - 修復 Tool Bridge Mode：改用 gpt-5.3-codex-low 作為預設工具橋接模型
@@ -127,6 +133,13 @@ const CONFIG = {
   // present in the request (Tool Bridge Mode), overriding the request model.
   // Set CURSOR_TOOL_BRIDGE_MODEL="" to disable override (use request model instead).
   toolBridgeModel: process.env.CURSOR_TOOL_BRIDGE_MODEL ?? "gpt-5.3-codex-high",
+  // Tool Bridge Agent Mode: cursor-agent mode used when tools are present.
+  // "" (default) = full agent mode — cursor-agent can execute shell/file ops natively,
+  //                so skills like autohackmd that run bash scripts work correctly.
+  // "ask"        = read-only ask mode — model outputs <tool_call> blocks for ALL tools
+  //                but CANNOT write files or run upload scripts (breaks autohackmd).
+  // Set CURSOR_TOOL_BRIDGE_AGENT_MODE=ask to restore old behaviour.
+  toolBridgeAgentMode: process.env.CURSOR_TOOL_BRIDGE_AGENT_MODE ?? "",
 };
 
 // Cache for available Cursor models (populated on first request)
@@ -632,7 +645,12 @@ function runCursorAgent(prompt, requestModel, stream, res, tools) {
   }
   args.push("--workspace", CONFIG.workspace);
   if (toolBridgeMode) {
-    args.push("--mode", "ask");
+    // Default: full agent mode (no --mode flag) so cursor-agent can execute shell/file
+    // ops natively. Skills like autohackmd (bash scripts) require native execution.
+    // Set CURSOR_TOOL_BRIDGE_AGENT_MODE=ask to use read-only ask mode instead (old behaviour).
+    if (CONFIG.toolBridgeAgentMode) {
+      args.push("--mode", CONFIG.toolBridgeAgentMode);
+    }
   } else if (CONFIG.mode) {
     args.push("--mode", CONFIG.mode);
   }
@@ -1348,7 +1366,7 @@ server.listen(CONFIG.port, CONFIG.host, () => {
     : "cursor agent login";
   console.log(`
 ┌──────────────────────────────────────────────────────────┐
-│              cursor-bridge v1.5.0                        │
+│              cursor-bridge v1.6.0                        │
 │    OpenAI-compatible API  →  Cursor CLI Agent            │
 ├──────────────────────────────────────────────────────────┤
 │  Endpoint:   http://${CONFIG.host}:${CONFIG.port}/v1/chat/completions  │
@@ -1361,6 +1379,7 @@ server.listen(CONFIG.port, CONFIG.host, () => {
 │  Log:        ${logPath.slice(-43).padEnd(43)}│
 │  Verbose:    ${(CONFIG.verbose ? "on (BRIDGE_VERBOSE=false to disable)" : "off").padEnd(43)}│
 │  ToolBridge: ${(CONFIG.toolBridgeModel || "disabled (use request model)").padEnd(43)}│
+│  TB-Mode:   ${(CONFIG.toolBridgeAgentMode ? `--mode ${CONFIG.toolBridgeAgentMode}` : "full agent (CURSOR_TOOL_BRIDGE_AGENT_MODE=ask for ask)").padEnd(43)}│
 │  Output:     stream-json + stream-partial-output         │
 │  MaxArgLen:  ${(CONFIG.maxArgLen + " chars").padEnd(43)}│
 └──────────────────────────────────────────────────────────┘
