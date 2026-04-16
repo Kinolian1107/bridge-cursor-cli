@@ -32,6 +32,19 @@ Any OpenAI-compatible client
 - **autohackmd / shell-script skill fix** — Removed forced `--mode ask` from Tool Bridge Mode. Previously v1.1 added `--mode ask` whenever tools were present, which prevented cursor-agent from executing write/run operations. Skills like `autohackmd` that execute bash scripts (file writes + HTTP uploads) would receive "I'm in Ask mode, I can't execute" responses. v1.6 defaults to **full agent mode**, so cursor-agent can execute shell scripts natively — `autohackmd` and similar skills now work correctly.
 - **`CURSOR_TOOL_BRIDGE_AGENT_MODE`** — New env var (default: `""` = full agent). Set to `"ask"` to restore the old read-only ask mode behaviour if needed.
 
+### v1.6 Tool Calling Behaviour Matrix
+
+In full agent mode, `gpt-5.3-codex-high` applies a smart strategy:
+
+| Tool type | Example | v1.6 behaviour | Outcome |
+|-----------|---------|----------------|---------|
+| Custom / external tools | `send_slack_message`, `query_database`, any custom API | ✅ Returns `tool_calls` | Hermes executes the tool |
+| Browser navigation | `browser_navigate` | ✅ Returns `tool_calls` | Hermes executes the tool |
+| Shell execution | `terminal` (simple request, no skill context) | ○ cursor-agent runs natively | Command executes, result in text |
+| Shell + file write (with skill context) | `terminal` + `write_file` in autohackmd | ✅/○ Either path | Upload succeeds either way |
+
+**Why this works:** cursor-agent uses its own built-in tools for anything it can execute natively (shell, web fetch). For tools it has no native ability to call (custom APIs, Slack, databases), it outputs `<tool_call>` blocks which cursor-bridge parses into OpenAI-compatible `tool_calls` for Hermes. This is smarter than the old forced `--mode ask`, which blocked all write/execute operations regardless of tool type.
+
 ## What's New in v1.5
 
 - **Tool Bridge Mode fix** — Auto-switches to `gpt-5.3-codex-high` when `tools` are present in the request. Claude-based models (`claude-4.6-*`, etc.) classify the injected `<tool_calling_protocol>` as a "prompt injection attack" and refuse to output `<tool_call>` blocks. `gpt-5.3-codex-high` reliably follows the protocol and handles multi-turn tool loops correctly.

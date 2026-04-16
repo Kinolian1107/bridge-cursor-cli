@@ -32,6 +32,19 @@
 - **autohackmd / shell script 技能修復** — 移除 Tool Bridge 模式強制使用 `--mode ask`。v1.1 起只要請求含有 tools，cursor-bridge 就會加上 `--mode ask`，導致 cursor-agent 拒絕執行寫檔和上傳等操作。使用 `autohackmd` 等需要執行 bash 腳本的技能時，會收到「我是 Ask 模式，無法執行」的回應。v1.6 預設改為 **full agent 模式**，cursor-agent 可以原生執行 shell 指令，`autohackmd` 等技能恢復正常運作。
 - **`CURSOR_TOOL_BRIDGE_AGENT_MODE`** — 新增環境變數（預設：`""` = full agent 模式）。設為 `"ask"` 可還原舊的唯讀 ask 模式。
 
+### v1.6 Tool Calling 行為矩陣
+
+Full agent 模式下，`gpt-5.3-codex-high` 採用智慧策略：
+
+| 工具類型 | 範例 | v1.6 行為 | 結果 |
+|---------|------|-----------|------|
+| 自訂／外部工具 | `send_slack_message`、`query_database`、任意自訂 API | ✅ 回傳 `tool_calls` | Hermes 執行工具 |
+| 瀏覽器導航 | `browser_navigate` | ✅ 回傳 `tool_calls` | Hermes 執行工具 |
+| Shell 執行 | `terminal`（簡單指令，無技能 context） | ○ cursor-agent 原生執行 | 指令有跑，結果以文字回傳 |
+| Shell＋寫檔（帶技能 context） | `terminal` + `write_file`（autohackmd 流程） | ✅/○ 視情況 | 上傳成功 |
+
+**原理：** cursor-agent 對能原生執行的操作（shell、web fetch）直接使用內建工具。對無法原生呼叫的工具（自訂 API、Slack、資料庫），則輸出 `<tool_call>` blocks，由 cursor-bridge 解析為 OpenAI-compatible `tool_calls` 交給 Hermes 執行。這比舊的強制 `--mode ask` 更智慧 — 後者不管工具類型，一律阻止寫入和執行。
+
 ## v1.5 更新內容
 
 - **Tool Bridge 模式修復** — 當請求中含有 `tools` 時，自動切換到 `gpt-5.3-codex-high`。Claude 系模型（`claude-4.6-*` 等）會將注入的 `<tool_calling_protocol>` 識別為「prompt injection 攻擊」並拒絕輸出 `<tool_call>` blocks。`gpt-5.3-codex-high` 能穩定遵循協議並正確處理多輪工具循環。
