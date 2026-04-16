@@ -126,7 +126,7 @@ const CONFIG = {
   // handles the tool loop correctly. This model is used automatically when tools are
   // present in the request (Tool Bridge Mode), overriding the request model.
   // Set CURSOR_TOOL_BRIDGE_MODEL="" to disable override (use request model instead).
-  toolBridgeModel: process.env.CURSOR_TOOL_BRIDGE_MODEL ?? "gpt-5.3-codex-low",
+  toolBridgeModel: process.env.CURSOR_TOOL_BRIDGE_MODEL ?? "gpt-5.3-codex-high",
 };
 
 // Cache for available Cursor models (populated on first request)
