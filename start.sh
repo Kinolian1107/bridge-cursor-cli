@@ -38,9 +38,10 @@ fi
 rm -f "$PIDFILE"
 
 if [ "$1" = "daemon" ]; then
-    # Background mode
+    # Background mode — setsid creates a new session so the bridge is immune
+    # to SIGHUP when the parent shell/nsenter session leader exits.
     echo "Starting cursor-bridge in background..."
-    nohup node "$SCRIPT_DIR/cursor-bridge.mjs" > /dev/null 2>&1 &
+    setsid nohup node "$SCRIPT_DIR/cursor-bridge.mjs" > /dev/null 2>&1 &
     echo $! > "$PIDFILE"
     echo "cursor-bridge started (PID $(cat "$PIDFILE"))"
     echo "Log: $LOGFILE"

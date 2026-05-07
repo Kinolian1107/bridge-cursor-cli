@@ -4,6 +4,49 @@ cursor-bridge 的所有版本更新紀錄。
 
 ---
 
+## v2.0（2026-05-07）
+
+**逐請求選項 + session 延續 + json-format 路徑。完全向下相容** — 既有 client（OpenClaw、Continue.dev 等）零修改即可繼續使用。
+
+### 新增
+
+- **`metadata.cursor_*` 區塊** — client 可以**逐請求**指定 cursor-agent flag，不用動 env var：
+  - `cursor_mode: "ask" | "plan" | "agent"`
+  - `cursor_force_output_format: "text" | "json" | "stream-json"`
+  - `cursor_sandbox: "enabled" | "disabled"`
+  - `cursor_worktree`、`cursor_worktree_base`、`cursor_skip_worktree_setup`
+  - `cursor_resume_chat_id`、`cursor_continue` — session 延續
+  - `cursor_stream_partial_output`、`cursor_trust`
+- **模型名前綴 token** — 最常用旋鈕的語法糖：
+  - `cursor/ask:<model>` → `--mode=ask`
+  - `cursor/plan:<model>` → `--mode=plan`
+  - `cursor/agent:<model>` → 不加 `--mode`（full agent）
+  - `cursor/worktree:<model>` → `--worktree`
+  - 可組合：`cursor/ask:worktree:<model>`
+  - 衝突時 metadata 永遠贏。
+- **`/v1/cursor-sessions/create`** — POST endpoint，呼叫 `cursor agent create-chat` 回傳 `{ chat_id }`，搭配 `metadata.cursor_resume_chat_id` 達成多輪上下文。
+- **`/v1/cursor-sessions`** — GET endpoint，透過 `cursor agent ls` 列出歷史 chat。
+- **`--output-format=json` 與 `--output-format=text` 路徑** — 非串流 client 可以請求單一 JSON 物件或純文字回應，完全跳過 NDJSON 解析。對 stateless 的用例（摘要、分類）速度顯著更快、邏輯更簡單。
+- **官方 fingerprint dedup** — 開啟 `--stream-partial-output` 時，cursor-agent 會 emit 三種 `assistant` event（真 delta / pre-tool-call 重播 / 收尾 flush）。v2.0 依官方文件以 `timestamp_ms` + `model_call_id` 雙欄位過濾，取代 v1.x 啟發式的長度比對 dedup。
+- **自動加 `--trust`**（可用 `cursor_trust=false` 關閉）— headless 在非信任 workspace 跑必加。
+- **`--sandbox enabled|disabled`** 顯式透傳（之前是 bridge 內部 default）。
+- **`--worktree-base` / `--skip-worktree-setup`** flag 全部接通。
+- **`/health` 多回能力矩陣** — `supports.metadata_block`、`supports.model_prefix_tokens`、`supports.output_formats`、`supports.session_endpoints`、`supports.fingerprint_dedup`。
+- **`lib/parse-cursor-options.mjs`** — 純解析器抽到 sibling module，方便單元測試。
+- **`tests/parse-options.test.mjs`** — 22 個 unit test 覆蓋所有解析邊界。
+
+### 變更
+
+- `runCursorAgent` 改吃已解析的 `options` 物件，不再直接讀 global。CONFIG.mode / CONFIG.worktree 仍作為 fallback default。
+- 開機 banner 升級為 `cursor-bridge v2.0.0`。
+
+### 升級備註
+
+- **OpenClaw / Continue.dev / curl client**：無需任何修改。沒帶 `metadata.cursor_*` 也沒用 prefix token 時，行為與 v1.6 完全一致。
+- **LazyBun 與類似的 headless 呼叫者**：建議帶 `metadata: { cursor_mode: "ask", cursor_force_output_format: "json" }`，可移除研究 / 摘要輸出中的串流前言與 skill 副作用。
+
+---
+
 ## v1.6（2026-04-16）
 
 - **autohackmd / shell script 技能修復** — 移除 Tool Bridge 模式強制使用 `--mode ask`。v1.1 起只要請求含有 tools，cursor-bridge 就會加上 `--mode ask`，導致 cursor-agent 拒絕執行寫檔和上傳等操作。使用 `autohackmd` 等需要執行 bash 腳本的技能時，會收到「我是 Ask 模式，無法執行」的回應。v1.6 預設改為 **full agent 模式**，cursor-agent 可以原生執行 shell 指令，`autohackmd` 等技能恢復正常運作。

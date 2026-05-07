@@ -50,6 +50,7 @@ import { createWriteStream, writeFileSync, unlinkSync, mkdtempSync, rmdirSync, m
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { parseCursorOptions as parseCursorOptionsImpl, parseModelPrefixTokens } from "./lib/parse-cursor-options.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -598,21 +599,28 @@ function classifyError(err, stderrOutput) {
   return { type: "upstream_error", message: msg.slice(0, 500), status: 502 };
 }
 
-// ─── Core: Cursor Agent Runner (v1.1 — stream-json) ─────────────
+// Per-request option resolver — implementation lives in lib/parse-cursor-options.mjs
+// for unit testability. This thin wrapper injects CONFIG so callers don't need it.
+function parseCursorOptions(data, stream, hasTools) {
+  return parseCursorOptionsImpl(data, stream, hasTools, {
+    mode: CONFIG.mode,
+    worktree: CONFIG.worktree,
+  });
+}
 
-function runCursorAgent(prompt, requestModel, stream, res, tools) {
+// ─── Core: Cursor Agent Runner (v2.0 — per-request options + json mode) ────
+
+function runCursorAgent(prompt, requestModel, stream, res, tools, options) {
   const requestId = `chatcmpl-${randomUUID()}`;
   const created = Math.floor(Date.now() / 1000);
 
-  // Support dynamic model switching: use the model from the request if provided,
-  // otherwise fall back to the configured default.
-  // The request model may come as "opus-4.6-thinking", "cursor/opus-4.6-thinking",
-  // or "bridge-cursor-cli/opus-4.6-thinking" — extract the bare model ID.
-  let model = CONFIG.cursorModel;
-  if (requestModel) {
-    const bare = requestModel.replace(/^(?:bridge-cursor-cli|cursor)\//, "");
-    if (bare) model = bare;
-  }
+  // Resolve per-request options (mode/output-format/worktree/sandbox/resume/etc).
+  // Always present — caller computes via parseCursorOptions and never passes null.
+  const opts = options;
+
+  // Support dynamic model switching. Bare model id was already extracted by
+  // parseModelPrefixTokens; fall back to CONFIG default if absent.
+  let model = opts.bareModel || CONFIG.cursorModel;
 
   // Tool Bridge Mode: when tools are present, override the model with toolBridgeModel.
   // Claude-based models (claude-4.6-*, etc.) refuse our <tool_calling_protocol> as
@@ -633,30 +641,58 @@ function runCursorAgent(prompt, requestModel, stream, res, tools) {
   const isDirectAgent = CONFIG.cursorBin.includes("cursor-agent");
   const args = isDirectAgent ? ["--print", "--force"] : ["agent", "--print", "--force"];
   args.push("--model", model);
-  // When tools are provided, use --mode ask to prevent cursor-agent from
-  // executing its own tools. The model will output <tool_call> blocks instead,
-  // which we parse and return as OpenAI tool_calls format.
 
-  args.push("--output-format", "stream-json");
-  // In tool bridge mode we buffer all output to parse <tool_call> blocks,
-  // so partial streaming adds no value and risks dedup-related doubling.
-  if (!toolBridgeMode) {
+  // Output format — driven by per-request options. Streaming clients always
+  // get stream-json (SSE needs events); non-streaming clients can request
+  // text / json / stream-json via metadata.cursor_force_output_format.
+  const effectiveOutputFormat = opts.outputFormat;
+  args.push("--output-format", effectiveOutputFormat);
+
+  // --stream-partial-output is only meaningful with stream-json; in tool bridge
+  // mode we buffer everything to detect <tool_call> blocks anyway so partial
+  // streaming adds no value and risks doubling.
+  if (effectiveOutputFormat === "stream-json" && opts.streamPartialOutput && !toolBridgeMode) {
     args.push("--stream-partial-output");
   }
+
   args.push("--workspace", CONFIG.workspace);
+
+  // Mode: tool bridge mode honours its own dedicated env (autohackmd shell ops);
+  // for normal requests we use whatever per-request opts.mode resolved to.
   if (toolBridgeMode) {
-    // Default: full agent mode (no --mode flag) so cursor-agent can execute shell/file
-    // ops natively. Skills like autohackmd (bash scripts) require native execution.
-    // Set CURSOR_TOOL_BRIDGE_AGENT_MODE=ask to use read-only ask mode instead (old behaviour).
     if (CONFIG.toolBridgeAgentMode) {
       args.push("--mode", CONFIG.toolBridgeAgentMode);
     }
-  } else if (CONFIG.mode) {
-    args.push("--mode", CONFIG.mode);
+  } else if (opts.mode) {
+    args.push("--mode", opts.mode);
   }
-  // Isolate edits in a temporary git worktree (edits stored under ~/.cursor/worktrees)
-  if (CONFIG.worktree) {
+
+  // Workspace trust — required for headless to skip the trust prompt.
+  if (opts.trust) {
+    args.push("--trust");
+  }
+
+  // Sandbox — explicit override supersedes the implicit --force flag.
+  if (opts.sandbox === "enabled" || opts.sandbox === "disabled") {
+    args.push("--sandbox", opts.sandbox);
+  }
+
+  // Worktree isolation.
+  if (opts.worktree) {
     args.push("--worktree");
+    if (opts.worktreeBase) {
+      args.push("--worktree-base", opts.worktreeBase);
+    }
+    if (opts.skipWorktreeSetup) {
+      args.push("--skip-worktree-setup");
+    }
+  }
+
+  // Session continuity.
+  if (opts.resumeChatId) {
+    args.push("--resume", opts.resumeChatId);
+  } else if (opts.continueSession) {
+    args.push("--continue");
   }
 
   // Decide how to pass the prompt
@@ -810,6 +846,21 @@ function runCursorAgent(prompt, requestModel, stream, res, tools) {
           // (OpenClaw handles thinking through the reasoning model config)
           thinkingChars += (event.text || "").length;
         } else if (type === "assistant") {
+          // Official Cursor stream-json gotcha (--stream-partial-output emits 3 variants):
+          //   1. timestamp_ms set, model_call_id unset  → real new delta (KEEP)
+          //   2. timestamp_ms set, model_call_id set    → pre-tool-call replay (DISCARD)
+          //   3. neither set                            → final flush replay (DISCARD)
+          // Reference: https://cursor.com/docs/cli/reference/output-format
+          // Only apply this filter when --stream-partial-output is enabled
+          // (otherwise the single assistant event per tool-call boundary is fine).
+          if (opts.streamPartialOutput && !toolBridgeMode) {
+            const hasTs = typeof event.timestamp_ms === "number";
+            const hasCallId = typeof event.model_call_id === "string" && event.model_call_id.length > 0;
+            if (!hasTs || hasCallId) {
+              continue; // discard duplicate variants 2 & 3
+            }
+          }
+
           // Extract text delta from assistant message
           const content = event.message?.content;
           let textChunk = "";
@@ -1042,6 +1093,91 @@ function runCursorAgent(prompt, requestModel, stream, res, tools) {
     let fullOutput = "";
     let assistantAccumNS = "";
 
+    // For --output-format=json or text we bypass the per-line NDJSON loop
+    // entirely. Just buffer everything and parse on close.
+    const isJsonFormat = effectiveOutputFormat === "json";
+    const isTextFormat = effectiveOutputFormat === "text";
+
+    if (isJsonFormat || isTextFormat) {
+      let rawBuffer = "";
+      proc.stdout.on("data", (chunk) => {
+        rawBuffer += chunk.toString();
+      });
+      proc.on("close", (code) => {
+        clearTimeout(timer);
+        if (tempFile) cleanupTempFile(tempFile);
+        verboseLog(`${requestId.slice(-8)}:CURSOR_STDOUT`, rawBuffer.slice(0, 4000));
+        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+
+        let responseText = "";
+        if (isJsonFormat) {
+          try {
+            const parsed = JSON.parse(rawBuffer);
+            // Cursor's --output-format=json shape: top-level `result` (text),
+            // `duration_ms`, `is_error`. Defensive: also accept `text` or
+            // `output` fields if shape ever drifts.
+            responseText = (typeof parsed.result === "string" ? parsed.result
+              : typeof parsed.text === "string" ? parsed.text
+              : typeof parsed.output === "string" ? parsed.output
+              : "").trim();
+            if (typeof parsed.duration_ms === "number") resultDurationMs = parsed.duration_ms;
+            if (parsed.is_error === true) isError = true;
+          } catch (err) {
+            console.warn(
+              `[${new Date().toISOString()}] ⚠ Request ${requestId.slice(-8)}: --output-format=json parse failed (${err.message}); falling back to raw stdout.`
+            );
+            responseText = rawBuffer.trim();
+          }
+        } else {
+          // text format — entire stdout is the response.
+          responseText = rawBuffer.trim();
+        }
+        outputChars = responseText.length;
+
+        if (code !== 0 && !responseText) {
+          const classified = classifyError(null, stderrOutput);
+          console.error(
+            `[${new Date().toISOString()}] ✗ Request ${requestId.slice(-8)}: failed in ${elapsed}s (code=${code}) → ${classified.type}`
+          );
+          sendError(res, classified.status, classified.message, classified.type);
+          return;
+        }
+
+        const usage = buildUsage();
+        const response = {
+          id: requestId,
+          object: "chat.completion",
+          created,
+          model: modelName,
+          choices: [{
+            index: 0,
+            message: { role: "assistant", content: responseText },
+            finish_reason: "stop",
+          }],
+          usage,
+          // Surface chat session id for callers that care (step 5 — resume support).
+          ...(opts.resumeChatId ? { cursor_chat_id: opts.resumeChatId } : {}),
+        };
+        res.writeHead(200, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
+        verboseLog(`${requestId.slice(-8)}:RESPONSE_BODY`, response);
+        res.end(JSON.stringify(response));
+        console.log(
+          `[${new Date().toISOString()}] ✓ Request ${requestId.slice(-8)}: completed in ${elapsed}s (non-stream/${effectiveOutputFormat}, ${responseText.length} chars, usage=${JSON.stringify(usage)})`
+        );
+      });
+      proc.on("error", (err) => {
+        clearTimeout(timer);
+        if (tempFile) cleanupTempFile(tempFile);
+        const classified = classifyError(err, stderrOutput);
+        console.error(
+          `[${new Date().toISOString()}] ✗ Request ${requestId.slice(-8)}: spawn error: ${err.message} → ${classified.type}`
+        );
+        sendError(res, classified.status, classified.message, classified.type);
+      });
+      if (!useStdinPipe) proc.stdin.end();
+      return;
+    }
+
     proc.stdout.on("data", (chunk) => {
       lineBuffer += chunk.toString();
       const lines = lineBuffer.split("\n");
@@ -1068,6 +1204,17 @@ function runCursorAgent(prompt, requestModel, stream, res, tools) {
         if (type === "thinking" && subtype === "delta") {
           thinkingChars += (event.text || "").length;
         } else if (type === "assistant") {
+          // Same fingerprint-based dedup as the streaming path. Only applies
+          // when --stream-partial-output is enabled (variant 2 & 3 don't appear
+          // without it, but defensive filter is cheap).
+          if (opts.streamPartialOutput && !toolBridgeMode) {
+            const hasTs = typeof event.timestamp_ms === "number";
+            const hasCallId = typeof event.model_call_id === "string" && event.model_call_id.length > 0;
+            if (!hasTs || hasCallId) {
+              continue;
+            }
+          }
+
           const content = event.message?.content;
           let textChunk = "";
           if (Array.isArray(content)) {
@@ -1258,10 +1405,18 @@ const server = createServer(async (req, res) => {
       JSON.stringify({
         status: "ok",
         service: "cursor-bridge",
-        version: "1.1.0",
+        version: "2.0.0",
         model: CONFIG.cursorModel,
         mode: CONFIG.mode || "agent",
         outputFormat: "stream-json",
+        // Per-request capabilities (step 2 — A+B hybrid).
+        supports: {
+          metadata_block: true,
+          model_prefix_tokens: ["ask", "plan", "agent", "worktree"],
+          output_formats: ["text", "json", "stream-json"],
+          session_endpoints: ["/v1/cursor-sessions/create", "/v1/cursor-sessions"],
+          fingerprint_dedup: true,
+        },
       })
     );
     return;
@@ -1313,8 +1468,9 @@ const server = createServer(async (req, res) => {
     const messages = data.messages || [];
     const stream = data.stream === true;
     const tools = data.tools || [];
+    const cursorOpts = parseCursorOptions(data, stream, tools.length > 0);
 
-    // Log full request params
+    // Log full request params (incl. resolved cursor opts for debugging)
     verboseLog("REQUEST_PARAMS", {
       model: data.model,
       stream,
@@ -1324,6 +1480,7 @@ const server = createServer(async (req, res) => {
       messages_count: messages.length,
       messages,
       ...(tools.length ? { tools } : {}),
+      cursor_opts: cursorOpts,
     });
 
     if (!messages.length) {
@@ -1346,7 +1503,74 @@ const server = createServer(async (req, res) => {
       );
     }
 
-    runCursorAgent(prompt, data.model, stream, res, tools);
+    runCursorAgent(prompt, data.model, stream, res, tools, cursorOpts);
+    return;
+  }
+
+  // ── POST /v1/cursor-sessions/create ── (Step 5 — session continuity)
+  // Spawns `cursor agent create-chat` and returns { chat_id }. Auth-free.
+  if (url.pathname === "/v1/cursor-sessions/create" && req.method === "POST") {
+    const isDirectAgent = CONFIG.cursorBin.includes("cursor-agent");
+    const args = isDirectAgent ? ["create-chat"] : ["agent", "create-chat"];
+    const proc = spawn(CONFIG.cursorBin, args, {
+      env: { ...process.env },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    proc.stdout.on("data", (c) => { stdout += c.toString(); });
+    proc.stderr.on("data", (c) => { stderr += c.toString(); });
+    const timer = setTimeout(() => proc.kill("SIGTERM"), 10_000);
+    proc.on("close", (code) => {
+      clearTimeout(timer);
+      if (code !== 0) {
+        sendError(res, 502, `create-chat failed: ${stderr.slice(0, 300) || `exit ${code}`}`, "upstream_error");
+        return;
+      }
+      // Cursor's `create-chat` prints the chat ID on stdout, possibly with
+      // surrounding whitespace or banner lines. Pluck the first chat-id-like token.
+      const match = stdout.match(/[a-z0-9_-]{8,}/i);
+      const chatId = match ? match[0] : stdout.trim();
+      if (!chatId) {
+        sendError(res, 502, "create-chat returned no chat id", "upstream_error");
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
+      res.end(JSON.stringify({ chat_id: chatId, raw: stdout.slice(0, 500) }));
+    });
+    proc.on("error", (err) => {
+      clearTimeout(timer);
+      sendError(res, 502, `create-chat spawn error: ${err.message}`, "upstream_error");
+    });
+    return;
+  }
+
+  // ── GET /v1/cursor-sessions ── (lists prior chats via `cursor agent ls`)
+  if (url.pathname === "/v1/cursor-sessions" && req.method === "GET") {
+    const isDirectAgent = CONFIG.cursorBin.includes("cursor-agent");
+    const args = isDirectAgent ? ["ls"] : ["agent", "ls"];
+    const proc = spawn(CONFIG.cursorBin, args, {
+      env: { ...process.env },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    proc.stdout.on("data", (c) => { stdout += c.toString(); });
+    proc.stderr.on("data", (c) => { stderr += c.toString(); });
+    const timer = setTimeout(() => proc.kill("SIGTERM"), 10_000);
+    proc.on("close", (code) => {
+      clearTimeout(timer);
+      if (code !== 0) {
+        sendError(res, 502, `ls failed: ${stderr.slice(0, 300) || `exit ${code}`}`, "upstream_error");
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
+      res.end(JSON.stringify({ raw: stdout }));
+    });
+    proc.on("error", (err) => {
+      clearTimeout(timer);
+      sendError(res, 502, `ls spawn error: ${err.message}`, "upstream_error");
+    });
     return;
   }
 
@@ -1366,7 +1590,7 @@ server.listen(CONFIG.port, CONFIG.host, () => {
     : "cursor agent login";
   console.log(`
 ┌──────────────────────────────────────────────────────────┐
-│              cursor-bridge v1.6.0                        │
+│              cursor-bridge v2.0.0                        │
 │    OpenAI-compatible API  →  Cursor CLI Agent            │
 ├──────────────────────────────────────────────────────────┤
 │  Endpoint:   http://${CONFIG.host}:${CONFIG.port}/v1/chat/completions  │

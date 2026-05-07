@@ -29,7 +29,9 @@
 
 ## 更新日誌
 
-完整版本歷史請見 [CHANGELOG.zh-TW.md](CHANGELOG.zh-TW.md)（v1.0 → v1.6）。
+完整版本歷史請見 [CHANGELOG.zh-TW.md](CHANGELOG.zh-TW.md)（v1.0 → v2.0）。
+
+> **v2.0 重點** — 可逐請求帶 `metadata.cursor_*` 旋鈕、模型名前綴 token（`cursor/ask:opus-4.6`）、`--output-format=json|text` 路徑、官方 fingerprint dedup、session 延續端點（`/v1/cursor-sessions/*`）。**完全向下相容** — 既有 client 行為完全不變。詳見下方 [逐請求選項（v2.0）](#逐請求選項v20)。
 
 ## 前置需求
 
@@ -247,10 +249,12 @@ Bridge 首次呼叫時自動探測 Cursor CLI 並快取結果。常見模型範�
 
 | 端點 | 方法 | 說明 |
 |------|------|------|
-| `/health` | GET | 健康檢查 |
+| `/health` | GET | 健康檢查（v2.0 多回 `supports.*` 能力旗標） |
 | `/v1/models` | GET | 列出可用的 Cursor 模型（探測 CLI，結果快取） |
 | `/v1/cursor-models` | GET | `/v1/models` 的別名 |
 | `/v1/chat/completions` | POST | 聊天補全（支援串流與非串流） |
+| `/v1/cursor-sessions/create` | POST | **v2.0** — 呼叫 `cursor agent create-chat` 建立空 chat，回傳 `{ chat_id }` 給 `metadata.cursor_resume_chat_id` 用 |
+| `/v1/cursor-sessions` | GET | **v2.0** — 透過 `cursor agent ls` 列出歷史 chat |
 
 ### 範例
 
@@ -305,12 +309,99 @@ curl http://127.0.0.1:18790/v1/chat/completions \
 |------|------|
 | `--print` / `-p` | 非互動（headless）模式 |
 | `--force` / `--yolo` | 直接套用檔案修改 |
-| `--output-format stream-json` | 結構化 NDJSON 事件串流 |
+| `--output-format text\|json\|stream-json` | 輸出格式。`json` = 單一 JSON 物件，非串流 client 最簡單（v2.0） |
 | `--stream-partial-output` | 增量文字 delta，支援即時串流 |
 | `--model <id>` | 選擇模型 |
 | `--workspace <path>` | 設定 repository root |
-| `--worktree` | 在暫時 git worktree 中隔離編輯 |
+| `--worktree` / `--worktree-base <branch>` / `--skip-worktree-setup` | 在暫時 git worktree 中隔離編輯（v2.0 全部接通） |
 | `--mode ask\|plan` | 唯讀模式 |
+| `--trust` | 跳過 workspace trust 提示（v2.0 預設自動加，可用 `cursor_trust=false` 關閉） |
+| `--sandbox enabled\|disabled` | 顯式 sandbox 覆寫（v2.0） |
+| `--resume <chat-id>` / `--continue` | Session 延續（v2.0） |
+
+## 逐請求選項（v2.0）
+
+cursor-bridge v2.0 在外觀上維持 OpenAI 相容，但讓 client **逐請求**指定 cursor-agent flag。沒帶的選項會 fallback 到 bridge 的 CONFIG default — 所以 OpenClaw / Continue.dev / 既有 client 行為完全不變。
+
+有兩種方式表達選項，可自由混用：
+
+### A）`metadata.cursor_*` 區塊（最完整）
+
+```jsonc
+POST /v1/chat/completions
+{
+  "model": "cursor/opus-4.6-thinking",
+  "messages": [{ "role": "user", "content": "..." }],
+  "stream": false,
+  "metadata": {
+    "cursor_mode": "ask",                  // ask | plan | agent (default: CONFIG.mode)
+    "cursor_force_output_format": "json",  // text | json | stream-json
+    "cursor_sandbox": "enabled",           // enabled | disabled
+    "cursor_worktree": false,
+    "cursor_worktree_base": "main",
+    "cursor_skip_worktree_setup": false,
+    "cursor_resume_chat_id": "ch-abc-123", // session 延續
+    "cursor_continue": false,              // 接續最近一次 chat
+    "cursor_stream_partial_output": true,  // 覆寫預設
+    "cursor_trust": true                   // 預設 true；要手動信任時設 false
+  }
+}
+```
+
+### B）模型名前綴 token（語法糖）
+
+```
+cursor/ask:opus-4.6-thinking          → --mode=ask
+cursor/plan:opus-4.6-thinking         → --mode=plan
+cursor/agent:opus-4.6-thinking        → 不加 --mode（full agent）
+cursor/worktree:opus-4.6-thinking     → --worktree
+cursor/ask:worktree:opus-4.6          → --mode=ask --worktree（可組合）
+```
+
+支援的 token：`ask`、`plan`、`agent`、`worktree`。未知 token 會被忽略。**衝突時 metadata 永遠贏。**
+
+### Output format 選擇規則
+
+| `stream` | `cursor_force_output_format` | 實際格式 |
+|---|---|---|
+| `true` | _(任意)_ | `stream-json`（SSE 必須有事件） |
+| `false` | `text` | `text`（純 stdout） |
+| `false` | `json` | `json`（單一 JSON — 最快、最簡單） |
+| `false` | `stream-json` | `stream-json`（預設；保留 usage 統計） |
+| `false` | _省略_ | `stream-json` |
+
+stateless 一次性呼叫（摘要、分類、單問單答）建議用 `json` mode，不需逐字串流時最省事。
+
+### Fingerprint dedup（v2.0）
+
+啟用 `--stream-partial-output` 時，cursor-agent 會 emit **三種變形** 的 `assistant` event（[官方文件](https://cursor.com/docs/cli/reference/output-format)）：
+
+| `timestamp_ms` | `model_call_id` | 處置 |
+|---|---|---|
+| 有 | 無 | **保留** — 真正的新 delta |
+| 有 | 有 | **丟棄** — pre-tool-call 重播 |
+| 無 | 無 | **丟棄** — 收尾 flush 重播 |
+
+v2.0 在串流與非串流路徑都實作這個過濾規則，取代 v1.x 的啟發式長度比對 dedup。
+
+### Session 延續（v2.0）
+
+跨多次請求要共享上下文時：
+
+```bash
+# 1. 建立新 session
+CHAT_ID=$(curl -s -X POST http://127.0.0.1:18790/v1/cursor-sessions/create | jq -r .chat_id)
+
+# 2. 後續請求帶上 chat_id
+curl http://127.0.0.1:18790/v1/chat/completions -H "Content-Type: application/json" -d "{
+  \"model\": \"cursor/opus-4.6-thinking\",
+  \"messages\": [{\"role\": \"user\", \"content\": \"...\"}],
+  \"stream\": false,
+  \"metadata\": { \"cursor_resume_chat_id\": \"$CHAT_ID\" }
+}"
+```
+
+Bridge 會傳 `--resume <chat-id>` 給 cursor-agent，所以模型看得到先前的 turn。
 
 ### Cursor CLI 認證機制
 
@@ -338,6 +429,15 @@ cursor-bridge 透過 `{ ...process.env }` 將所有環境變數傳遞給子程�
 CURSOR_TOOL_BRIDGE_MODEL=gpt-5.3-codex-low   # 較低成本的替代方案
 CURSOR_TOOL_BRIDGE_MODEL=                     # 停用覆寫，使用請求中指定的模型
 ```
+
+如果你希望工具呼叫維持在 `composer-2`（不切到 codex），可建立這樣的設定檔：
+```bash
+# .env.mode-composer-tools
+CURSOR_MODEL=composer-2
+CURSOR_TOOL_BRIDGE_MODEL=
+```
+
+這樣在請求含 `tools` 時就不會強制覆寫成 codex，而是維持請求/預設模型。不過就 `<tool_call>` 協議穩定性而言，codex 仍然是最穩定的選項。
 
 ### ACP（Agent Communication Protocol）
 

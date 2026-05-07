@@ -29,7 +29,9 @@ Any OpenAI-compatible client
 
 ## Changelog
 
-See [CHANGELOG.md](CHANGELOG.md) for full version history (v1.0 → v1.6).
+See [CHANGELOG.md](CHANGELOG.md) for full version history (v1.0 → v2.0).
+
+> **v2.0 highlights** — per-request `metadata.cursor_*` knobs, model-name prefix tokens (`cursor/ask:opus-4.6`), `--output-format=json|text` paths, official fingerprint dedup, session continuity endpoints (`/v1/cursor-sessions/*`). Fully backwards-compatible — existing clients keep their current behaviour. See [Per-request Options (v2.0)](#per-request-options-v20) below.
 
 ## Prerequisites
 
@@ -247,10 +249,12 @@ Change the default model by setting `CURSOR_MODEL` in `.env` and restarting, or 
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/health` | GET | Health check |
+| `/health` | GET | Health check (v2.0 reports `supports.*` capability flags) |
 | `/v1/models` | GET | List available Cursor models (probed from CLI, cached) |
 | `/v1/cursor-models` | GET | Alias for `/v1/models` |
 | `/v1/chat/completions` | POST | Chat completions (streaming & non-streaming) |
+| `/v1/cursor-sessions/create` | POST | **v2.0** — spawn `cursor agent create-chat`, returns `{ chat_id }` for `metadata.cursor_resume_chat_id` continuity |
+| `/v1/cursor-sessions` | GET | **v2.0** — list prior chats via `cursor agent ls` |
 
 ### Examples
 
@@ -305,12 +309,99 @@ Stops the bridge, optionally restores OpenClaw config from backup, and removes t
 |------|---------|
 | `--print` / `-p` | Non-interactive (headless) mode |
 | `--force` / `--yolo` | Apply file modifications directly |
-| `--output-format stream-json` | Structured NDJSON event stream |
+| `--output-format text\|json\|stream-json` | Output format. `json` = single JSON object, simplest for non-streaming clients (v2.0) |
 | `--stream-partial-output` | Incremental text deltas for live streaming |
 | `--model <id>` | Model selection |
 | `--workspace <path>` | Set repository root |
-| `--worktree` | Isolate edits in temp git worktree |
+| `--worktree` / `--worktree-base <branch>` / `--skip-worktree-setup` | Isolate edits in temp git worktree (v2.0 wired through) |
 | `--mode ask\|plan` | Read-only modes |
+| `--trust` | Skip workspace trust prompt (auto-added by v2.0 unless `cursor_trust=false`) |
+| `--sandbox enabled\|disabled` | Explicit sandbox override (v2.0) |
+| `--resume <chat-id>` / `--continue` | Session continuity (v2.0) |
+
+## Per-request Options (v2.0)
+
+cursor-bridge v2.0 stays OpenAI-compatible on the surface but lets clients pick cursor-agent flags **per request**. Anything omitted falls back to the bridge's CONFIG defaults — so OpenClaw / Continue.dev / older clients keep their current behaviour without changes.
+
+There are two ways to express options, and they can be mixed freely:
+
+### A) `metadata.cursor_*` block (most expressive)
+
+```jsonc
+POST /v1/chat/completions
+{
+  "model": "cursor/opus-4.6-thinking",
+  "messages": [{ "role": "user", "content": "..." }],
+  "stream": false,
+  "metadata": {
+    "cursor_mode": "ask",                  // ask | plan | agent (default: CONFIG.mode)
+    "cursor_force_output_format": "json",  // text | json | stream-json
+    "cursor_sandbox": "enabled",           // enabled | disabled
+    "cursor_worktree": false,
+    "cursor_worktree_base": "main",
+    "cursor_skip_worktree_setup": false,
+    "cursor_resume_chat_id": "ch-abc-123", // session continuity
+    "cursor_continue": false,              // continue most recent chat
+    "cursor_stream_partial_output": true,  // override default
+    "cursor_trust": true                   // default true; set false to require manual trust
+  }
+}
+```
+
+### B) Model-name prefix tokens (syntactic sugar)
+
+```
+cursor/ask:opus-4.6-thinking          → --mode=ask
+cursor/plan:opus-4.6-thinking         → --mode=plan
+cursor/agent:opus-4.6-thinking        → no --mode flag (full agent)
+cursor/worktree:opus-4.6-thinking     → --worktree
+cursor/ask:worktree:opus-4.6          → --mode=ask --worktree (combinable)
+```
+
+Recognised tokens: `ask`, `plan`, `agent`, `worktree`. Unknown tokens are ignored. **Metadata always wins over conflicting model-name tokens.**
+
+### Output format selection rules
+
+| `stream` | `cursor_force_output_format` | Effective format |
+|---|---|---|
+| `true` | _(any)_ | `stream-json` (SSE requires events) |
+| `false` | `text` | `text` (raw stdout) |
+| `false` | `json` | `json` (single JSON object — fastest, simplest) |
+| `false` | `stream-json` | `stream-json` (default; preserves usage tracking) |
+| `false` | _omitted_ | `stream-json` |
+
+Use `json` mode for stateless calls (summarisation, classification, single-shot queries) where you don't care about token-by-token streaming.
+
+### Fingerprint dedup (v2.0)
+
+When `--stream-partial-output` is enabled, cursor-agent emits **three variants** of `assistant` events per the [official docs](https://cursor.com/docs/cli/reference/output-format):
+
+| `timestamp_ms` | `model_call_id` | Action |
+|---|---|---|
+| set | unset | **keep** — real new delta |
+| set | set | **discard** — pre-tool-call replay |
+| unset | unset | **discard** — final flush replay |
+
+v2.0 implements this filter natively in the streaming + non-streaming paths, deprecating the v1.x heuristic length-prefix dedup.
+
+### Session continuity (v2.0)
+
+For multi-turn flows that should share context across requests:
+
+```bash
+# 1. Create a fresh session
+CHAT_ID=$(curl -s -X POST http://127.0.0.1:18790/v1/cursor-sessions/create | jq -r .chat_id)
+
+# 2. Use it on subsequent requests
+curl http://127.0.0.1:18790/v1/chat/completions -H "Content-Type: application/json" -d "{
+  \"model\": \"cursor/opus-4.6-thinking\",
+  \"messages\": [{\"role\": \"user\", \"content\": \"...\"}],
+  \"stream\": false,
+  \"metadata\": { \"cursor_resume_chat_id\": \"$CHAT_ID\" }
+}"
+```
+
+The bridge passes `--resume <chat-id>` to cursor-agent so the model sees prior turns.
 
 ### Cursor CLI Authentication
 
@@ -338,6 +429,15 @@ Override the tool bridge model via env var:
 CURSOR_TOOL_BRIDGE_MODEL=gpt-5.3-codex-low   # cheaper alternative
 CURSOR_TOOL_BRIDGE_MODEL=                     # disable override, use request model
 ```
+
+If you want tool calls to stay on `composer-2` (no codex override), create a profile like:
+```bash
+# .env.mode-composer-tools
+CURSOR_MODEL=composer-2
+CURSOR_TOOL_BRIDGE_MODEL=
+```
+
+This keeps `tools` requests on the request/default model instead of forcing codex. Keep in mind codex is still the most reliable option for strict `<tool_call>` protocol behavior.
 
 ### ACP (Agent Communication Protocol)
 

@@ -4,6 +4,49 @@ All notable changes to cursor-bridge are documented here.
 
 ---
 
+## v2.0 (2026-05-07)
+
+**Per-request options + session continuity + json-format path. Fully backwards-compatible** — existing clients (OpenClaw, Continue.dev, etc.) need zero changes.
+
+### Added
+
+- **`metadata.cursor_*` block** — clients can now pass cursor-agent flags per request without touching env vars:
+  - `cursor_mode: "ask" | "plan" | "agent"`
+  - `cursor_force_output_format: "text" | "json" | "stream-json"`
+  - `cursor_sandbox: "enabled" | "disabled"`
+  - `cursor_worktree`, `cursor_worktree_base`, `cursor_skip_worktree_setup`
+  - `cursor_resume_chat_id`, `cursor_continue` — session continuity
+  - `cursor_stream_partial_output`, `cursor_trust`
+- **Model-name prefix tokens** — sugar for the most common knobs:
+  - `cursor/ask:<model>` → `--mode=ask`
+  - `cursor/plan:<model>` → `--mode=plan`
+  - `cursor/agent:<model>` → no `--mode` (full agent)
+  - `cursor/worktree:<model>` → `--worktree`
+  - Combinable: `cursor/ask:worktree:<model>`
+  - Metadata always wins on conflict.
+- **`/v1/cursor-sessions/create`** — POST endpoint that spawns `cursor agent create-chat` and returns `{ chat_id }`. Pair with `metadata.cursor_resume_chat_id` for multi-turn flows.
+- **`/v1/cursor-sessions`** — GET endpoint that lists prior chats via `cursor agent ls`.
+- **`--output-format=json` and `--output-format=text` paths** — non-streaming clients can now request a single JSON object or plain text response, bypassing NDJSON parsing entirely. Significantly faster + simpler for stateless use cases (summarisation, classification).
+- **Official fingerprint dedup** — when `--stream-partial-output` is on, cursor-agent emits three variants of `assistant` events (real delta / pre-tool-call replay / final flush). v2.0 filters by the documented `timestamp_ms` + `model_call_id` field combination per [Cursor docs](https://cursor.com/docs/cli/reference/output-format), replacing v1.x's heuristic length-prefix dedup.
+- **`--trust`** auto-added (controllable via `cursor_trust=false`) — required for headless operation in untrusted workspaces.
+- **`--sandbox enabled|disabled`** explicit pass-through (was previously bridge-internal default).
+- **`--worktree-base` / `--skip-worktree-setup`** flags wired through.
+- **`/health` advertises capability matrix** — `supports.metadata_block`, `supports.model_prefix_tokens`, `supports.output_formats`, `supports.session_endpoints`, `supports.fingerprint_dedup`.
+- **`lib/parse-cursor-options.mjs`** — pure parser extracted to a sibling module for unit testability.
+- **`tests/parse-options.test.mjs`** — 22 unit tests covering all parsing edge cases.
+
+### Changed
+
+- `runCursorAgent` now takes a resolved `options` bag instead of reading globals directly. CONFIG.mode / CONFIG.worktree are still honoured as defaults when no per-request value is provided.
+- Startup banner bumped to `cursor-bridge v2.0.0`.
+
+### Migration notes
+
+- **OpenClaw / Continue.dev / curl clients**: no action needed. Without `metadata.cursor_*` and without prefix tokens, behaviour is identical to v1.6.
+- **LazyBun & similar headless callers**: opt into `metadata: { cursor_mode: "ask", cursor_force_output_format: "json" }` to drop streaming preambles and skill side-effects from research/summary outputs.
+
+---
+
 ## v1.6 (2026-04-16)
 
 - **autohackmd / shell-script skill fix** — Removed forced `--mode ask` from Tool Bridge Mode. Previously v1.1 added `--mode ask` whenever tools were present, which prevented cursor-agent from executing write/run operations. Skills like `autohackmd` that execute bash scripts (file writes + HTTP uploads) would receive "I'm in Ask mode, I can't execute" responses. v1.6 defaults to **full agent mode**, so cursor-agent can execute shell scripts natively — `autohackmd` and similar skills now work correctly.
