@@ -5,6 +5,24 @@
 
 ---
 
+## 0. 近期待辦（需要實機驗證）
+
+### 0.1 在 Windows 實機測試 install.ps1（2026-06-13 新增）
+
+`install.ps1`（commit `da01424`）是在 WSL 上寫的，**沒有 pwsh 可以實際執行**，
+只有語法層面比照 `start.ps1` 的既有寫法。要在 Windows 電腦上跑一次確認：
+
+- [ ] `.\install.ps1` 能正確偵測 Node ≥ 22（含 `node -v` 版本解析）
+- [ ] Cursor CLI 偵測順序正確：PATH 的 `cursor-agent`/`cursor` → `%USERPROFILE%\.local\bin\cursor-agent.exe`/`.cmd`
+- [ ] `--list-models` 的 best-effort 探測不會因錯誤中斷腳本
+- [ ] 產生的 `.env` 內容正確（`CURSOR_BIN` 為完整路徑、UTF-8 編碼無 BOM 問題 — `Set-Content -Encoding UTF8` 在 Windows PowerShell 5.1 會帶 BOM，若 `process.loadEnvFile` 解析失敗需改用 `[IO.File]::WriteAllText`）
+- [ ] 接著 `.\start.ps1 daemon` → health check 通過
+- [ ] 找不到 Node / Cursor CLI 時的錯誤訊息與 exit 1 行為正常
+
+測完若有修正，記得同步更新 `docs/CHANGELOG*.md` 與 README 的 Windows Quick Start。
+
+---
+
 ## 1. ACP（Agent Communication Protocol）整合 — Deferred
 
 ### 背景

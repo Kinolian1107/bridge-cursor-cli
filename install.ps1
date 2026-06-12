@@ -80,14 +80,18 @@ Write-Host ""
 
 # -- 3. Create .env --------------------------------------------
 $EnvFile = Join-Path $ScriptDir ".env"
-@"
+$EnvContent = @"
 # cursor-bridge configuration
 BRIDGE_PORT=$BridgePort
 CURSOR_MODEL=$CursorModel
 CURSOR_BIN=$CursorBin
 CURSOR_WORKSPACE=$CursorWorkspace
 # CURSOR_MODE=ask  # Uncomment for read-only Q&A mode
-"@ | Set-Content -Path $EnvFile -Encoding UTF8
+"@
+# WriteAllText emits UTF-8 *without* BOM on both Windows PowerShell 5.1 and
+# pwsh 7 (Set-Content -Encoding UTF8 adds a BOM on 5.1, which could confuse
+# Node's process.loadEnvFile).
+[System.IO.File]::WriteAllText($EnvFile, $EnvContent + "`n")
 Write-Host "[OK] Created $EnvFile"
 
 # -- Done -------------------------------------------------------
