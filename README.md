@@ -2,7 +2,7 @@
 
 # cursor-bridge
 
-An OpenAI-compatible API proxy that bridges any OpenAI-compatible client to [Cursor CLI](https://cursor.com/cli) — use frontier AI models (Claude 4.6 Opus, GPT-5.2, Gemini 3 Pro, etc.) through your Cursor subscription, **no API keys needed**.
+An OpenAI-compatible API proxy that bridges any OpenAI-compatible client to [Cursor CLI](https://cursor.com/cli) — use frontier AI models (Claude Fable 5, Claude Opus 4.8, GPT-5.5, Gemini 3.1 Pro, etc.) through your Cursor subscription, **no API keys needed**. Runs on Linux, macOS and Windows.
 
 ## Architecture
 
@@ -29,16 +29,18 @@ Any OpenAI-compatible client
 
 ## Changelog
 
-See [CHANGELOG.md](CHANGELOG.md) for full version history (v1.0 → v2.0).
+See [CHANGELOG.md](CHANGELOG.md) for full version history (v1.0 → v2.1).
 
-> **v2.0 highlights** — per-request `metadata.cursor_*` knobs, model-name prefix tokens (`cursor/ask:opus-4.6`), `--output-format=json|text` paths, official fingerprint dedup, session continuity endpoints (`/v1/cursor-sessions/*`). Fully backwards-compatible — existing clients keep their current behaviour. See [Per-request Options (v2.0)](#per-request-options-v20) below.
+> **v2.1 highlights** — Windows support (no more bash dependency), model allowlist via `node select-models.mjs` (tames the 130+ model list in Hermes' `/model` menu), model probing via official `cursor-agent --list-models`, `.env` self-loading, default model `auto`. See [Model Allowlist](#model-allowlist-select-models) below.
+>
+> **v2.0 highlights** — per-request `metadata.cursor_*` knobs, model-name prefix tokens (`cursor/ask:<model>`), `--output-format=json|text` paths, official fingerprint dedup, session continuity endpoints (`/v1/cursor-sessions/*`). Fully backwards-compatible. See [Per-request Options (v2.0)](#per-request-options-v20) below.
 
 ## Prerequisites
 
 | Requirement | Version |
 |-------------|---------|
 | Node.js | >= 22 |
-| [Cursor CLI](https://cursor.com/cli) | Installed (`curl https://cursor.com/install -fsS \| bash`) |
+| [Cursor CLI](https://cursor.com/cli) | Linux/macOS/WSL: `curl https://cursor.com/install -fsS \| bash`<br>Windows (native): `irm 'https://cursor.com/install?win32=true' \| iex` |
 | Cursor account | Logged in (`cursor agent login`) or `CURSOR_API_KEY` set |
 
 ## Authentication
@@ -90,18 +92,27 @@ cp .env.example .env
 ### 2. Start the bridge
 
 ```bash
-# Foreground (for debugging)
+# Foreground (for debugging) — works on all platforms
 node cursor-bridge.mjs
 
-# Background (daemon)
+# Background (daemon) — Linux/macOS
 ./start.sh daemon
-
-# Stop
 ./stop.sh
 
 # Follow today's log
 tail -f logs/cursor-bridge.$(date +%Y%m%d).log
 ```
+
+```powershell
+# Windows (PowerShell)
+.\start.ps1 daemon
+.\stop.ps1
+
+# Follow today's log
+Get-Content "logs\cursor-bridge.$(Get-Date -Format yyyyMMdd).log" -Wait
+```
+
+> The bridge loads `.env` by itself (v2.1), so `node cursor-bridge.mjs` alone picks up your configuration on any platform. On Windows, set `CURSOR_BIN` in `.env` to your Cursor CLI binary (e.g. `C:\Users\you\.local\bin\cursor-agent.exe`); `.cmd`/`.bat`/`.ps1` shims are also supported.
 
 ### 3. Test
 
@@ -117,21 +128,46 @@ curl http://127.0.0.1:18790/v1/chat/completions \
   -d '{"model":"auto","messages":[{"role":"user","content":"Hello!"}]}'
 ```
 
+## Model Allowlist (select-models)
+
+Cursor exposes **130+ models**, which floods model pickers (Hermes' `/model` menu becomes unusable). Pick a short allowlist once with the interactive picker:
+
+```bash
+node select-models.mjs        # or: npm run models
+```
+
+- ↑/↓ move · **space** toggle · **a** all · **n** none · type to filter · **enter** save
+- The selection is saved to `models.json`; the bridge's `/v1/models` then only advertises those models — **no restart needed**
+- After saving, the tool offers to sync the selection straight into Hermes Agent (`~/.hermes/config.yaml`) and OpenClaw (`~/.openclaw/openclaw.json`)
+
+Non-interactive usage:
+
+```bash
+node select-models.mjs --list                       # print all probed models
+node select-models.mjs --set "auto,gpt-5.3-codex-high,claude-fable-5-thinking-medium"
+node select-models.mjs --sync                       # re-sync current allowlist to Hermes/OpenClaw
+node select-models.mjs --clear                      # remove the allowlist (show everything)
+curl "http://127.0.0.1:18790/v1/models?all=1"       # bypass the allowlist
+```
+
 ## Hermes Agent Integration (Optional)
 
-If you use [Hermes Agent](https://github.com/nousresearch/hermes-agent), run `./set-hermesagent.sh` — it configures Hermes to use cursor-bridge and **syncs all available cursor-bridge models** into Hermes so `/model` shows the full list.
+If you use [Hermes Agent](https://github.com/nousresearch/hermes-agent), run `./set-hermesagent.sh` — it configures Hermes to use cursor-bridge and syncs the bridge's model list into Hermes so `/model` shows them.
 
 ```bash
 # Make sure cursor-bridge is running first
 ./start.sh daemon
 
-# Configure Hermes and sync all models
+# Optional but recommended: trim the model list first (see Model Allowlist above)
+node select-models.mjs
+
+# Configure Hermes and sync models
 ./set-hermesagent.sh
 ```
 
-After running, select `bridge-cursor-cli` in Hermes `/model` to see all available models (auto, claude-4.6-opus-*, gpt-5.*, gemini-3.1-pro, etc.).
+After running, select `bridge-cursor-cli` in Hermes `/model`. With an allowlist in place the menu only shows the models you actually use instead of all 130+.
 
-Re-run `./set-hermesagent.sh` any time to refresh the model list from the bridge.
+Re-run `./set-hermesagent.sh` (or `node select-models.mjs --sync`) any time to refresh the model list.
 
 ## OpenClaw Integration (Optional)
 
@@ -143,7 +179,7 @@ To configure manually, edit `~/.openclaw/openclaw.json`:
 {
   "agents": {
     "defaults": {
-      "model": { "primary": "cursor-cli/opus-4.6-thinking" }
+      "model": { "primary": "cursor-cli/claude-fable-5-thinking-medium" }
     }
   },
   "models": {
@@ -153,8 +189,8 @@ To configure manually, edit `~/.openclaw/openclaw.json`:
         "apiKey": "cursor-bridge-local",
         "baseUrl": "http://127.0.0.1:18790/v1",
         "models": [{
-          "id": "opus-4.6-thinking",
-          "name": "Cursor CLI (opus-4.6-thinking)",
+          "id": "claude-fable-5-thinking-medium",
+          "name": "Cursor CLI (claude-fable-5-thinking-medium)",
           "reasoning": true,
           "input": ["text"],
           "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
@@ -190,6 +226,7 @@ All configuration is via environment variables (or `.env` file):
 | `CURSOR_API_KEY` | *(empty)* | Cursor API key (alternative to `cursor agent login`) |
 | `CURSOR_AUTH_TOKEN` | *(empty)* | Cursor auth token (alternative to API key) |
 | `BRIDGE_TIMEOUT_MS` | `300000` | Request timeout (5 min) |
+| `BRIDGE_MODELS_FILE` | `<project>/models.json` | **v2.1** — model allowlist file managed by `select-models.mjs` |
 
 ## Logs
 
@@ -214,9 +251,9 @@ The log stream auto-rotates at midnight without requiring a restart.
 
 | Use case | Recommended model | Reason |
 |----------|-------------------|--------|
-| General chat / coding | `claude-4.6-opus-high-thinking` or `auto` | Best quality reasoning |
-| Tool-using agents (Hermes, etc.) | `gpt-5.3-codex-high` (**auto-selected**) | Only model that reliably outputs `<tool_call>` blocks without refusing as "prompt injection" |
-| Fast / cheap tasks | `gpt-5.3-codex-low` | Lower cost, still follows tool protocol |
+| General chat / coding | `claude-fable-5-thinking-medium`, `claude-opus-4-8-thinking-high` or `auto` | Best quality reasoning |
+| Tool-using agents (Hermes, etc.) | `gpt-5.3-codex-high` (**auto-selected**) | Reliably outputs `<tool_call>` blocks without refusing as "prompt injection" |
+| Fast / cheap tasks | `composer-2.5` or `gpt-5.3-codex-low` | Lower cost, fast |
 
 > **Important for tool-using agents:** Claude-based models (`claude-4.6-*`, `claude-4.*`) refuse the `<tool_calling_protocol>` instruction as a "prompt injection attack" — they will never output `<tool_call>` blocks. cursor-bridge automatically switches to `gpt-5.3-codex-high` whenever `tools` are present in the request, regardless of which model you specified.
 
@@ -228,20 +265,21 @@ Query the bridge to get the live list of models available under your Cursor subs
 curl http://127.0.0.1:18790/v1/cursor-models
 ```
 
-The bridge probes the Cursor CLI on the first call and caches the result. Example models you may see:
+The bridge probes the Cursor CLI (`cursor-agent --list-models`) on the first call and caches the result. Example models you may see (as of cursor-agent 2026.06 — 130+ total):
 
 | Model ID | Description |
 |----------|-------------|
 | `auto` | Let Cursor pick the best model — **recommended** |
+| `claude-fable-5-thinking-medium` | Claude Fable 5 with extended thinking (also `-low`/`-high`/`-xhigh`/`-max`) |
+| `claude-opus-4-8-thinking-high` | Claude Opus 4.8 with extended thinking |
 | `claude-4.6-opus-high-thinking` | Claude 4.6 Opus, high budget + extended thinking |
-| `claude-4.6-opus-max-thinking` | Claude 4.6 Opus, max budget + extended thinking |
-| `claude-4.6-sonnet-medium-thinking` | Claude 4.6 Sonnet with extended thinking |
-| `composer-2` | Cursor Composer 2 |
-| `gpt-5.3-codex` | GPT-5.3 Codex |
-| `gpt-5.2` | GPT-5.2 |
+| `gpt-5.5-high` | GPT-5.5 High (also `-none`/`-low`/`-medium`/`-extra-high`) |
+| `gpt-5.3-codex-high` | GPT-5.3 Codex High — best for tool calling |
+| `composer-2.5` | Cursor Composer 2.5 (fast) |
 | `gemini-3.1-pro` | Gemini 3.1 Pro |
+| `grok-4.3` / `kimi-k2.5` | Grok 4.3 / Kimi K2.5 |
 
-> Model availability depends on your Cursor subscription plan. The API returns only what your account can actually use.
+> Model availability depends on your Cursor subscription plan. The API returns only what your account can actually use. Cursor renames models frequently — old ids like `opus-4.6-thinking` or `composer-2` no longer exist, which is another reason `auto` is the default.
 
 Change the default model by setting `CURSOR_MODEL` in `.env` and restarting, or pass `model` in each API request for per-request switching.
 
@@ -249,8 +287,8 @@ Change the default model by setting `CURSOR_MODEL` in `.env` and restarting, or 
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/health` | GET | Health check (v2.0 reports `supports.*` capability flags) |
-| `/v1/models` | GET | List available Cursor models (probed from CLI, cached) |
+| `/health` | GET | Health check (reports `supports.*` capability flags) |
+| `/v1/models` | GET | List Cursor models (probed from CLI, cached). **v2.1**: filtered by the `models.json` allowlist; append `?all=1` for the full list |
 | `/v1/cursor-models` | GET | Alias for `/v1/models` |
 | `/v1/chat/completions` | POST | Chat completions (streaming & non-streaming) |
 | `/v1/cursor-sessions/create` | POST | **v2.0** — spawn `cursor agent create-chat`, returns `{ chat_id }` for `metadata.cursor_resume_chat_id` continuity |
@@ -297,8 +335,8 @@ Stops the bridge, optionally restores OpenClaw config from backup, and removes t
      --output-format stream-json --stream-partial-output
      --workspace <path> [--worktree] [--mode ask|plan]
    ```
-   - Prompts ≤ 32KB: passed as CLI argument
-   - Prompts > 32KB: piped via stdin (avoids Linux `E2BIG` limit)
+   - Prompts ≤ 32KB: passed as CLI argument (Linux/macOS)
+   - Prompts > 32KB — or any prompt on Windows: piped via stdin (avoids Linux `E2BIG` / Windows command-line limits)
 4. **cursor agent** processes the prompt via your Cursor subscription
 5. The bridge parses NDJSON `stream-json` events (`system`, `assistant`, `tool_call`, `result`) and converts them to OpenAI-compatible SSE
 6. Token usage is estimated from character counts and included in the final response
@@ -330,7 +368,7 @@ There are two ways to express options, and they can be mixed freely:
 ```jsonc
 POST /v1/chat/completions
 {
-  "model": "cursor/opus-4.6-thinking",
+  "model": "cursor/claude-fable-5-thinking-medium",
   "messages": [{ "role": "user", "content": "..." }],
   "stream": false,
   "metadata": {
@@ -351,11 +389,11 @@ POST /v1/chat/completions
 ### B) Model-name prefix tokens (syntactic sugar)
 
 ```
-cursor/ask:opus-4.6-thinking          → --mode=ask
-cursor/plan:opus-4.6-thinking         → --mode=plan
-cursor/agent:opus-4.6-thinking        → no --mode flag (full agent)
-cursor/worktree:opus-4.6-thinking     → --worktree
-cursor/ask:worktree:opus-4.6          → --mode=ask --worktree (combinable)
+cursor/ask:claude-fable-5-medium          → --mode=ask
+cursor/plan:claude-fable-5-medium         → --mode=plan
+cursor/agent:claude-fable-5-medium        → no --mode flag (full agent)
+cursor/worktree:claude-fable-5-medium     → --worktree
+cursor/ask:worktree:claude-fable-5-medium          → --mode=ask --worktree (combinable)
 ```
 
 Recognised tokens: `ask`, `plan`, `agent`, `worktree`. Unknown tokens are ignored. **Metadata always wins over conflicting model-name tokens.**
@@ -394,7 +432,7 @@ CHAT_ID=$(curl -s -X POST http://127.0.0.1:18790/v1/cursor-sessions/create | jq 
 
 # 2. Use it on subsequent requests
 curl http://127.0.0.1:18790/v1/chat/completions -H "Content-Type: application/json" -d "{
-  \"model\": \"cursor/opus-4.6-thinking\",
+  \"model\": \"cursor/claude-fable-5-thinking-medium\",
   \"messages\": [{\"role\": \"user\", \"content\": \"...\"}],
   \"stream\": false,
   \"metadata\": { \"cursor_resume_chat_id\": \"$CHAT_ID\" }
@@ -430,10 +468,10 @@ CURSOR_TOOL_BRIDGE_MODEL=gpt-5.3-codex-low   # cheaper alternative
 CURSOR_TOOL_BRIDGE_MODEL=                     # disable override, use request model
 ```
 
-If you want tool calls to stay on `composer-2` (no codex override), create a profile like:
+If you want tool calls to stay on `composer-2.5` (no codex override), create a profile like:
 ```bash
 # .env.mode-composer-tools
-CURSOR_MODEL=composer-2
+CURSOR_MODEL=composer-2.5
 CURSOR_TOOL_BRIDGE_MODEL=
 ```
 

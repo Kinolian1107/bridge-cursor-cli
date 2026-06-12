@@ -15,7 +15,7 @@ fi
 
 # Defaults (only if not already set by .env)
 export BRIDGE_PORT="${BRIDGE_PORT:-18790}"
-export CURSOR_MODEL="${CURSOR_MODEL:-opus-4.6-thinking}"
+export CURSOR_MODEL="${CURSOR_MODEL:-auto}"
 export CURSOR_BIN="${CURSOR_BIN:-cursor}"
 export CURSOR_WORKSPACE="${CURSOR_WORKSPACE:-$HOME/.cursor-bridge/workspace}"
 export PATH="$HOME/.local/bin:$HOME/.nvm/versions/node/$(node -v 2>/dev/null | sed 's/v//')/bin:$PATH"

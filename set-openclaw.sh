@@ -49,8 +49,8 @@ fi
 
 # ── Probe available models ───────────────────────────────────
 AVAILABLE_MODELS=""
-if curl -sf "http://127.0.0.1:${BRIDGE_PORT}/v1/cursor-models" >/dev/null 2>&1; then
-  AVAILABLE_MODELS=$(curl -sf "http://127.0.0.1:${BRIDGE_PORT}/v1/cursor-models" \
+if curl -sf "http://127.0.0.1:${BRIDGE_PORT}/v1/models" >/dev/null 2>&1; then
+  AVAILABLE_MODELS=$(curl -sf "http://127.0.0.1:${BRIDGE_PORT}/v1/models" \
     | node -e "const d=require('fs').readFileSync('/dev/stdin','utf-8'); const j=JSON.parse(d); console.log(j.data.map(m=>m.id).join(', '))" 2>/dev/null || echo "")
 fi
 
@@ -69,11 +69,13 @@ else
 fi
 
 # ── Build model list for provider ───────────────────────────
+# /v1/models honours the allowlist in models.json — run
+# `node select-models.mjs` first to trim the provider model list.
 # Start with the default model; add extra well-known names if bridge is up
 MODELS_JSON="[{\"id\": \"${CURSOR_MODEL}\", \"name\": \"Cursor (${CURSOR_MODEL})\", \"reasoning\": true, \"input\": [\"text\"], \"cost\": {\"input\": 0, \"output\": 0, \"cacheRead\": 0, \"cacheWrite\": 0}, \"contextWindow\": 200000, \"maxTokens\": 65536}]"
 
 if [ -n "$AVAILABLE_MODELS" ]; then
-  MODELS_JSON=$(curl -sf "http://127.0.0.1:${BRIDGE_PORT}/v1/cursor-models" \
+  MODELS_JSON=$(curl -sf "http://127.0.0.1:${BRIDGE_PORT}/v1/models" \
     | node -e "
 const d = require('fs').readFileSync('/dev/stdin', 'utf-8');
 const j = JSON.parse(d);
@@ -142,5 +144,5 @@ fi
 
 echo ""
 echo "Done. Test with:"
-echo "  curl http://127.0.0.1:${BRIDGE_PORT}/v1/cursor-models"
+echo "  curl http://127.0.0.1:${BRIDGE_PORT}/v1/models"
 echo ""

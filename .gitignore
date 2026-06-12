@@ -4,3 +4,4 @@ cursor-bridge.pid
 logs/
 *.log
 *.pid
+models.json

@@ -64,8 +64,8 @@ info "Current baseUrl: $CURRENT_BASE_URL"
 
 # ── Probe available models from bridge ───────────────────────
 AVAILABLE_MODELS=""
-if curl -sf "http://127.0.0.1:${BRIDGE_PORT}/v1/cursor-models" >/dev/null 2>&1; then
-  AVAILABLE_MODELS=$(curl -sf "http://127.0.0.1:${BRIDGE_PORT}/v1/cursor-models" \
+if curl -sf "http://127.0.0.1:${BRIDGE_PORT}/v1/models" >/dev/null 2>&1; then
+  AVAILABLE_MODELS=$(curl -sf "http://127.0.0.1:${BRIDGE_PORT}/v1/models" \
     | node -e "const d=require('fs').readFileSync('/dev/stdin','utf-8'); const j=JSON.parse(d); console.log(j.data.map(m=>m.id).join(', '))" 2>/dev/null || echo "")
 fi
 
@@ -101,12 +101,15 @@ ok "Set model.default = ${CURSOR_MODEL}"
 echo ""
 ok "Hermes Agent configured to use cursor-bridge (model: ${CURSOR_MODEL})"
 
-# ── Sync all models to custom_providers ─────────────────────
+# ── Sync models to custom_providers ─────────────────────────
+# /v1/models honours the allowlist in models.json — run
+# `node select-models.mjs` first to keep the Hermes /model menu short.
 echo ""
-info "Syncing all cursor-bridge models to Hermes custom_providers..."
+info "Syncing cursor-bridge models to Hermes custom_providers..."
+info "(tip: 'node select-models.mjs' trims this list to the models you actually use)"
 
 if [ -n "$AVAILABLE_MODELS" ]; then
-  MODELS_JSON=$(curl -sf "http://127.0.0.1:${BRIDGE_PORT}/v1/cursor-models" \
+  MODELS_JSON=$(curl -sf "http://127.0.0.1:${BRIDGE_PORT}/v1/models" \
     | node -e "const d=require('fs').readFileSync('/dev/stdin','utf-8'); const j=JSON.parse(d); process.stdout.write(JSON.stringify(j.data.map(m=>m.id)))" 2>/dev/null || echo "[]")
 
   if [ "$MODELS_JSON" != "[]" ] && [ -n "$MODELS_JSON" ]; then
@@ -185,5 +188,5 @@ fi
 echo ""
 echo "Done. Test with:"
 echo "  hermes chat"
-echo "  curl http://127.0.0.1:${BRIDGE_PORT}/v1/cursor-models"
+echo "  curl http://127.0.0.1:${BRIDGE_PORT}/v1/models"
 echo ""

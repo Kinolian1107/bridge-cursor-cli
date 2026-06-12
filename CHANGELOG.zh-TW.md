@@ -4,6 +4,37 @@ cursor-bridge 的所有版本更新紀錄。
 
 ---
 
+## v2.1（2026-06-12）
+
+**Windows 支援 + 模型 allowlist。完全向下相容。**
+
+### 新增
+
+- **Windows 支援** — bridge 現在可以原生跑在 Windows（與 macOS）上：
+  - 移除 `bash`/`cat` 依賴：長 prompt 直接寫入子行程的 stdin（Windows 上一律走 stdin，避開命令列長度限制與 `.cmd` quoting 地雷）。
+  - `CURSOR_WORKSPACE` 預設值改用 `os.homedir()`，不再依賴 `$HOME`。
+  - `CURSOR_BIN` 可以指向 `.exe`、`.cmd`、`.bat` 或 `.ps1` — `lib/cursor-cli.mjs` 自動選擇對應的 spawn 策略（直接執行 / `cmd.exe` 帶 quoting / `powershell.exe -File`）。
+  - 新增 `start.ps1` / `stop.ps1` PowerShell 腳本（daemon 模式、health check、強制終止 fallback），對應 `start.sh` / `stop.sh`。
+  - bridge 透過 `process.loadEnvFile()` 自行載入 `.env` — 任何平台直接 `node cursor-bridge.mjs` 即可；真正的環境變數仍優先於 `.env`。
+- **模型 allowlist + `select-models.mjs`** — Cursor 現在開放 130+ 個模型，把 Hermes Agent 的 `/model` 選單灌爆了。新的互動式小工具（`node select-models.mjs` / `npm run models`）會探測即時模型清單、讓你勾選子集合（方向鍵 / 空白鍵 / 直接打字過濾）、存到 `models.json`，並可一鍵把選取結果同步到 Hermes（`~/.hermes/config.yaml` 的 `custom_providers`）與 OpenClaw（`~/.openclaw/openclaw.json`）。旗標：`--list`、`--set "a,b,c"`、`--sync`、`--clear`。
+  - `/v1/models`（與 `/v1/cursor-models`）只回傳 allowlist 內的模型；`?all=1` 可略過過濾。`models.json` 每次請求重新讀取 — 不需重啟 bridge。
+  - 新增 `BRIDGE_MODELS_FILE` 環境變數可覆寫 allowlist 路徑。
+  - `/health` 新增 `supports.model_allowlist` 與 `supports.windows`。
+- **官方模型探測** — 模型清單改用 `cursor-agent --list-models`（含顯示名稱），不再靠故意送出無效模型解析錯誤輸出。舊版 stderr probe 保留為 fallback。新增 `lib/probe-models.mjs` + `lib/cursor-cli.mjs` 模組與 14 個單元測試（`tests/probe-models.test.mjs`）。
+
+### 變更
+
+- **預設模型改為 `auto`** — 舊預設 `opus-4.6-thinking` 已不存在（Cursor 將其改名為 `claude-4.6-opus-*-thinking` 系列，之後又推出 `claude-opus-4-8-*` 與 `claude-fable-5-*`）。`auto` 不怕 Cursor 頻繁改名；文件列出目前推薦的模型 id。
+- `set-hermesagent.sh` / `set-openclaw.sh` 改從過濾後的 `/v1/models` 同步，allowlist 對兩個整合都生效。
+- 文件更新至 2026.06 模型目錄（`claude-fable-5-*`、`claude-opus-4-8-*`、`gpt-5.5-*`、`gpt-5.4-*`、`composer-2.5`、`gemini-3.5-flash`、`grok-4.3`、`kimi-k2.5`…）與官方 Windows 原生安裝指令（`irm 'https://cursor.com/install?win32=true' | iex`）。
+
+### 遷移注意事項
+
+- 若你的 `.env` 釘死了過期的模型 id（例如 `CURSOR_MODEL=composer-2` 或 `opus-4.6-thinking`），請更新 — 用 `cursor-agent --list-models` 或 `node select-models.mjs --list` 查現行 id。
+- 既有 client 不需任何修改；沒有 `models.json` 時 `/v1/models` 輸出與 v2.0 完全相同。
+
+---
+
 ## v2.0（2026-05-07）
 
 **逐請求選項 + session 延續 + json-format 路徑。完全向下相容** — 既有 client（OpenClaw、Continue.dev 等）零修改即可繼續使用。

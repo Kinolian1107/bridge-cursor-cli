@@ -4,6 +4,37 @@ All notable changes to cursor-bridge are documented here.
 
 ---
 
+## v2.1 (2026-06-12)
+
+**Windows support + model allowlist. Fully backwards-compatible.**
+
+### Added
+
+- **Windows support** — the bridge now runs natively on Windows (and macOS):
+  - Removed the `bash`/`cat` dependency: long prompts are written directly to the spawned process's stdin (on Windows, prompts always go via stdin to dodge command-line length limits and `.cmd` quoting hazards).
+  - `CURSOR_WORKSPACE` default now uses `os.homedir()` instead of `$HOME`.
+  - `CURSOR_BIN` may point to `.exe`, `.cmd`, `.bat` or `.ps1` binaries — `lib/cursor-cli.mjs` picks the right spawn strategy (direct / `cmd.exe` with quoting / `powershell.exe -File`).
+  - New `start.ps1` / `stop.ps1` PowerShell scripts (daemon mode, health check, force-kill fallback) mirroring `start.sh` / `stop.sh`.
+  - The bridge loads `.env` by itself via `process.loadEnvFile()` — `node cursor-bridge.mjs` works identically on every platform; real environment variables still win over `.env`.
+- **Model allowlist + `select-models.mjs`** — Cursor now exposes 130+ models, which flooded Hermes Agent's `/model` picker. The new interactive tool (`node select-models.mjs` / `npm run models`) probes the live model list, lets you pick a subset (arrow keys / space / type-to-filter), saves it to `models.json`, and offers to sync the selection straight into Hermes (`custom_providers` in `~/.hermes/config.yaml`) and OpenClaw (`~/.openclaw/openclaw.json`). Flags: `--list`, `--set "a,b,c"`, `--sync`, `--clear`.
+  - `/v1/models` (and `/v1/cursor-models`) now return only allowlisted models; `?all=1` bypasses the filter. `models.json` is re-read per request — no bridge restart needed.
+  - `BRIDGE_MODELS_FILE` env var overrides the allowlist path.
+  - `/health` adds `supports.model_allowlist` and `supports.windows`.
+- **Official model probing** — model discovery now uses `cursor-agent --list-models` (with display names) instead of parsing the error output of an intentionally-invalid model request. The legacy stderr probe remains as a fallback for older CLIs. New `lib/probe-models.mjs` + `lib/cursor-cli.mjs` modules with 14 unit tests (`tests/probe-models.test.mjs`).
+
+### Changed
+
+- **Default model: `auto`** — the previous default `opus-4.6-thinking` no longer exists (Cursor renamed the family to `claude-4.6-opus-*-thinking` and has since shipped `claude-opus-4-8-*` and `claude-fable-5-*`). `auto` survives Cursor's frequent model renames; docs list current recommended ids.
+- `set-hermesagent.sh` / `set-openclaw.sh` sync from the filtered `/v1/models` endpoint, so the allowlist applies to both integrations.
+- Docs refreshed for the 2026.06 model catalogue (`claude-fable-5-*`, `claude-opus-4-8-*`, `gpt-5.5-*`, `gpt-5.4-*`, `composer-2.5`, `gemini-3.5-flash`, `grok-4.3`, `kimi-k2.5`, …) and the official native Windows installer (`irm 'https://cursor.com/install?win32=true' | iex`).
+
+### Migration notes
+
+- If your `.env` pins a stale id (e.g. `CURSOR_MODEL=composer-2` or `opus-4.6-thinking`), update it — run `cursor-agent --list-models` or `node select-models.mjs --list` for current ids.
+- Existing clients need no changes; without a `models.json` the `/v1/models` output is identical to v2.0.
+
+---
+
 ## v2.0 (2026-05-07)
 
 **Per-request options + session continuity + json-format path. Fully backwards-compatible** — existing clients (OpenClaw, Continue.dev, etc.) need zero changes.

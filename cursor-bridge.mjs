@@ -1,12 +1,21 @@
 #!/usr/bin/env node
 /**
- * cursor-bridge v1.6 — OpenAI-compatible API proxy for Cursor CLI
+ * cursor-bridge v2.1 — OpenAI-compatible API proxy for Cursor CLI
  *
  * 架構:
  *   Any OpenAI-compatible client  ──(OpenAI API)──►  cursor-bridge (port 18790)  ──►  cursor-agent --print --stream-json
  *
  * 這個代理伺服器提供 OpenAI 相容的 API 格式，
  * 讓任何支援 OpenAI API 的用戶端可以呼叫 Cursor CLI 的 AI 模型。
+ *
+ * v2.1 改進:
+ *   - Windows 支援：移除 bash/cat 依賴（prompt 直接寫入 stdin）、HOME → os.homedir()、
+ *     支援 .exe/.cmd/.bat/.ps1 形式的 CURSOR_BIN（見 lib/cursor-cli.mjs）
+ *   - 模型探測改用官方 `cursor-agent --list-models`（保留舊 stderr probe 作為 fallback）
+ *   - 模型 allowlist：models.json（由 select-models.mjs 產生）過濾 /v1/models 回傳清單，
+ *     解決 Hermes /model 選單 130+ 模型爆量問題；?all=1 仍可取得完整清單
+ *   - 預設模型改為 auto（舊預設 opus-4.6-thinking 已從 Cursor 移除）
+ *   - bridge 自行載入 .env（process.loadEnvFile），不再依賴 start.sh
  *
  * v1.6 改進:
  *   - 修復 autohackmd / 需要執行 shell 指令的技能：移除 tool bridge mode 強制 --mode ask
@@ -44,15 +53,24 @@
  */
 
 import { createServer } from "node:http";
-import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { createWriteStream, writeFileSync, unlinkSync, mkdtempSync, rmdirSync, mkdirSync } from "node:fs";
+import { createWriteStream, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { parseCursorOptions as parseCursorOptionsImpl, parseModelPrefixTokens } from "./lib/parse-cursor-options.mjs";
+import { listCursorModels, filterModels, readSelectedModels } from "./lib/probe-models.mjs";
+import { IS_WINDOWS, agentArgs, spawnCursor } from "./lib/cursor-cli.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
+
+// Load .env from the project dir (cross-platform — works without start.sh).
+// Already-set environment variables take precedence over .env values.
+try {
+  process.loadEnvFile(join(SCRIPT_DIR, ".env"));
+} catch {
+  // no .env file — defaults below apply
+}
 
 // ─── Daily log setup ─────────────────────────────────────────────
 const LOG_DIR = join(SCRIPT_DIR, "logs");
@@ -108,9 +126,13 @@ function verboseLog(tag, content) {
 const CONFIG = {
   port: parseInt(process.env.BRIDGE_PORT || "18790"),
   host: process.env.BRIDGE_HOST || "127.0.0.1",
-  cursorModel: process.env.CURSOR_MODEL || "opus-4.6-thinking",
+  // "auto" lets Cursor pick — survives Cursor's frequent model renames.
+  // Override with CURSOR_MODEL (see `cursor-agent --list-models` for current ids).
+  cursorModel: process.env.CURSOR_MODEL || "auto",
   cursorBin: process.env.CURSOR_BIN || "cursor",
-  workspace: process.env.CURSOR_WORKSPACE || `${process.env.HOME}/.cursor-bridge/workspace`,
+  workspace: process.env.CURSOR_WORKSPACE || join(homedir(), ".cursor-bridge", "workspace"),
+  // Model allowlist file written by select-models.mjs; filters /v1/models.
+  modelsFile: process.env.BRIDGE_MODELS_FILE || join(SCRIPT_DIR, "models.json"),
   // 'ask' = read-only Q&A, 'plan' = read-only planning, '' = full agent (can edit files/run commands)
   mode: process.env.CURSOR_MODE || "",
   // Isolate edits in a temporary git worktree (stored under ~/.cursor/worktrees)
@@ -120,7 +142,7 @@ const CONFIG = {
   // Maximum prompt length (chars) to pass as CLI argument.
   // Linux MAX_ARG_STRLEN = 131072 bytes; with multi-byte chars (Chinese = 3 bytes/char)
   // and env overhead, we need a very conservative limit.
-  // Above this, prompt is written to a temp file and piped via stdin.
+  // Above this (or always on Windows), the prompt is piped via stdin.
   maxArgLen: parseInt(process.env.BRIDGE_MAX_ARG_LEN || "32768"),
   // Token estimation ratio: chars per token (lower = more conservative estimate)
   // For mixed English/Chinese content, ~3.0 is reasonable
@@ -147,57 +169,21 @@ const CONFIG = {
 let _cachedModels = null;
 
 /**
- * Probe the Cursor CLI for available model names by intentionally using
- * an invalid model name and parsing the "Available models: ..." from stderr.
+ * Probe the Cursor CLI for available models via `--list-models`
+ * (lib/probe-models.mjs handles the legacy stderr fallback).
  * Result is cached after the first successful probe.
  */
-function probeAvailableModels() {
-  return new Promise((resolve) => {
-    if (_cachedModels) {
-      resolve(_cachedModels);
-      return;
-    }
-
-    const isDirectAgent = CONFIG.cursorBin.includes("cursor-agent");
-    const args = isDirectAgent
-      ? ["--model", "__probe__", "--print", "--force", "--output-format", "stream-json", "--workspace", CONFIG.workspace, "x"]
-      : ["agent", "--model", "__probe__", "--print", "--force", "--output-format", "stream-json", "--workspace", CONFIG.workspace, "x"];
-
-    const proc = spawn(CONFIG.cursorBin, args, {
-      env: { ...process.env },
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    proc.stdin.end();
-
-    let stderr = "";
-    proc.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
-
-    const timer = setTimeout(() => { proc.kill("SIGTERM"); }, 10000);
-
-    proc.on("close", () => {
-      clearTimeout(timer);
-      // Parse "Available models: model1, model2, ..." from stderr
-      const match = stderr.match(/Available models:\s*([^\n]+)/i);
-      if (match) {
-        const models = match[1]
-          .split(",")
-          .map((s) => s.trim())
-          .filter(Boolean);
-        _cachedModels = models;
-        console.log(`[cursor-bridge] Probed ${models.length} available models from Cursor CLI`);
-        resolve(models);
-      } else {
-        // Probe failed — return empty list (don't cache so next request retries)
-        console.warn("[cursor-bridge] Could not probe available models from Cursor CLI");
-        resolve([]);
-      }
-    });
-
-    proc.on("error", () => {
-      clearTimeout(timer);
-      resolve([]);
-    });
-  });
+async function probeAvailableModels() {
+  if (_cachedModels?.length) return _cachedModels;
+  const models = await listCursorModels({ cursorBin: CONFIG.cursorBin });
+  if (models.length) {
+    _cachedModels = models;
+    console.log(`[cursor-bridge] Probed ${models.length} available models from Cursor CLI`);
+  } else {
+    // Probe failed — don't cache so the next request retries
+    console.warn("[cursor-bridge] Could not probe available models from Cursor CLI");
+  }
+  return models;
 }
 
 // Tools that cursor-agent already has natively (no need to inject)
@@ -522,27 +508,6 @@ function messagesToPrompt(messages, tools) {
 }
 
 /**
- * Write a long prompt to a temp file, return the file path.
- * Caller is responsible for cleanup.
- */
-function writeTempPrompt(prompt) {
-  const dir = mkdtempSync(join(tmpdir(), "cursor-bridge-"));
-  const filePath = join(dir, "prompt.txt");
-  writeFileSync(filePath, prompt, "utf-8");
-  return filePath;
-}
-
-function cleanupTempFile(filePath) {
-  try {
-    unlinkSync(filePath);
-    const dir = filePath.replace(/\/[^/]+$/, "");
-    rmdirSync(dir);
-  } catch {
-    // ignore cleanup errors
-  }
-}
-
-/**
  * Read the full request body as a string
  */
 async function readBody(req) {
@@ -638,8 +603,7 @@ function runCursorAgent(prompt, requestModel, stream, res, tools, options) {
   const modelName = `cursor/${model}`;
 
   // Build cursor agent arguments
-  const isDirectAgent = CONFIG.cursorBin.includes("cursor-agent");
-  const args = isDirectAgent ? ["--print", "--force"] : ["agent", "--print", "--force"];
+  const args = agentArgs(CONFIG.cursorBin, ["--print", "--force"]);
   args.push("--model", model);
 
   // Output format — driven by per-request options. Streaming clients always
@@ -695,9 +659,10 @@ function runCursorAgent(prompt, requestModel, stream, res, tools, options) {
     args.push("--continue");
   }
 
-  // Decide how to pass the prompt
-  let tempFile = null;
-  const useStdinPipe = prompt.length > CONFIG.maxArgLen;
+  // Decide how to pass the prompt.
+  // Windows: always via stdin (cmd.exe command-line limit + .cmd quoting hazards).
+  // POSIX: via stdin only above maxArgLen (Linux MAX_ARG_STRLEN / E2BIG).
+  const useStdinPipe = IS_WINDOWS || prompt.length > CONFIG.maxArgLen;
 
   if (!useStdinPipe) {
     args.push(prompt);
@@ -721,15 +686,10 @@ function runCursorAgent(prompt, requestModel, stream, res, tools, options) {
     stdio: ["pipe", "pipe", "pipe"],
   };
 
-  let proc;
-  if (useStdinPipe) {
-    tempFile = writeTempPrompt(prompt);
-    const escapedArgs = args.map((a) => `'${a.replace(/'/g, "'\\''")}'`).join(" ");
-    const cmdStr = `cat "${tempFile}" | ${CONFIG.cursorBin} ${escapedArgs}`;
-    proc = spawn("bash", ["-c", cmdStr], spawnOpts);
-  } else {
-    proc = spawn(CONFIG.cursorBin, args, spawnOpts);
-  }
+  const proc = spawnCursor(CONFIG.cursorBin, args, spawnOpts);
+  // Ignore EPIPE etc. if the process dies before consuming stdin;
+  // the 'error'/'close' handlers below produce the actual error response.
+  proc.stdin.on("error", () => {});
 
   let stderrOutput = "";
   let killed = false;
@@ -926,7 +886,6 @@ function runCursorAgent(prompt, requestModel, stream, res, tools, options) {
 
     proc.on("close", (code) => {
       clearTimeout(timer);
-      if (tempFile) cleanupTempFile(tempFile);
 
       // Process any remaining data in buffer
       if (lineBuffer.trim()) {
@@ -1068,7 +1027,6 @@ function runCursorAgent(prompt, requestModel, stream, res, tools, options) {
 
     proc.on("error", (err) => {
       clearTimeout(timer);
-      if (tempFile) cleanupTempFile(tempFile);
 
       const classified = classifyError(err, stderrOutput);
       console.error(
@@ -1105,7 +1063,6 @@ function runCursorAgent(prompt, requestModel, stream, res, tools, options) {
       });
       proc.on("close", (code) => {
         clearTimeout(timer);
-        if (tempFile) cleanupTempFile(tempFile);
         verboseLog(`${requestId.slice(-8)}:CURSOR_STDOUT`, rawBuffer.slice(0, 4000));
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
 
@@ -1167,14 +1124,14 @@ function runCursorAgent(prompt, requestModel, stream, res, tools, options) {
       });
       proc.on("error", (err) => {
         clearTimeout(timer);
-        if (tempFile) cleanupTempFile(tempFile);
         const classified = classifyError(err, stderrOutput);
         console.error(
           `[${new Date().toISOString()}] ✗ Request ${requestId.slice(-8)}: spawn error: ${err.message} → ${classified.type}`
         );
         sendError(res, classified.status, classified.message, classified.type);
       });
-      if (!useStdinPipe) proc.stdin.end();
+      if (useStdinPipe) proc.stdin.write(prompt);
+      proc.stdin.end();
       return;
     }
 
@@ -1257,7 +1214,6 @@ function runCursorAgent(prompt, requestModel, stream, res, tools, options) {
 
     proc.on("close", (code) => {
       clearTimeout(timer);
-      if (tempFile) cleanupTempFile(tempFile);
 
       // Process remaining buffer
       if (lineBuffer.trim()) {
@@ -1360,7 +1316,6 @@ function runCursorAgent(prompt, requestModel, stream, res, tools, options) {
 
     proc.on("error", (err) => {
       clearTimeout(timer);
-      if (tempFile) cleanupTempFile(tempFile);
 
       const classified = classifyError(err, stderrOutput);
       console.error(
@@ -1370,10 +1325,12 @@ function runCursorAgent(prompt, requestModel, stream, res, tools, options) {
     });
   }
 
-  // Close stdin if not piping (when using stdin pipe, bash handles this)
-  if (!useStdinPipe) {
-    proc.stdin.end();
+  // Feed the prompt via stdin when piping (replaces the old bash `cat | cursor` —
+  // works on Windows too); otherwise just close stdin.
+  if (useStdinPipe) {
+    proc.stdin.write(prompt);
   }
+  proc.stdin.end();
 }
 
 // ─── HTTP Server ─────────────────────────────────────────────────
@@ -1405,7 +1362,7 @@ const server = createServer(async (req, res) => {
       JSON.stringify({
         status: "ok",
         service: "cursor-bridge",
-        version: "2.0.0",
+        version: "2.1.0",
         model: CONFIG.cursorModel,
         mode: CONFIG.mode || "agent",
         outputFormat: "stream-json",
@@ -1416,6 +1373,9 @@ const server = createServer(async (req, res) => {
           output_formats: ["text", "json", "stream-json"],
           session_endpoints: ["/v1/cursor-sessions/create", "/v1/cursor-sessions"],
           fingerprint_dedup: true,
+          // v2.1 — models.json allowlist filters /v1/models (?all=1 bypasses)
+          model_allowlist: true,
+          windows: true,
         },
       })
     );
@@ -1423,11 +1383,20 @@ const server = createServer(async (req, res) => {
   }
 
   // ── GET /v1/models  or  GET /v1/cursor-models ──
+  // Returns the allowlist-filtered model list when models.json exists
+  // (written by `node select-models.mjs`). Pass ?all=1 for the full probed list.
   if (
     (url.pathname === "/v1/models" || url.pathname === "/v1/cursor-models") &&
     req.method === "GET"
   ) {
-    const models = await probeAvailableModels();
+    const probed = await probeAvailableModels();
+    const showAll = url.searchParams.get("all") === "1" || url.searchParams.get("all") === "true";
+    // Re-read models.json on every request so select-models takes effect without restart.
+    const selected = showAll ? [] : readSelectedModels(CONFIG.modelsFile);
+    const filtered = filterModels(probed, selected);
+    // If the allowlist filters everything out (e.g. all selected ids renamed
+    // away by Cursor), fall back to the full probed list rather than none.
+    const models = filtered.length ? filtered : probed;
     const now = Math.floor(Date.now() / 1000);
     res.writeHead(200, {
       "Content-Type": "application/json",
@@ -1436,11 +1405,12 @@ const server = createServer(async (req, res) => {
     res.end(
       JSON.stringify({
         object: "list",
-        data: models.map((id) => ({
-          id,
+        data: models.map((m) => ({
+          id: m.id,
           object: "model",
           created: now,
           owned_by: "cursor",
+          display_name: m.name,
         })),
       })
     );
@@ -1510,9 +1480,8 @@ const server = createServer(async (req, res) => {
   // ── POST /v1/cursor-sessions/create ── (Step 5 — session continuity)
   // Spawns `cursor agent create-chat` and returns { chat_id }. Auth-free.
   if (url.pathname === "/v1/cursor-sessions/create" && req.method === "POST") {
-    const isDirectAgent = CONFIG.cursorBin.includes("cursor-agent");
-    const args = isDirectAgent ? ["create-chat"] : ["agent", "create-chat"];
-    const proc = spawn(CONFIG.cursorBin, args, {
+    const args = agentArgs(CONFIG.cursorBin, ["create-chat"]);
+    const proc = spawnCursor(CONFIG.cursorBin, args, {
       env: { ...process.env },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -1547,9 +1516,8 @@ const server = createServer(async (req, res) => {
 
   // ── GET /v1/cursor-sessions ── (lists prior chats via `cursor agent ls`)
   if (url.pathname === "/v1/cursor-sessions" && req.method === "GET") {
-    const isDirectAgent = CONFIG.cursorBin.includes("cursor-agent");
-    const args = isDirectAgent ? ["ls"] : ["agent", "ls"];
-    const proc = spawn(CONFIG.cursorBin, args, {
+    const args = agentArgs(CONFIG.cursorBin, ["ls"]);
+    const proc = spawnCursor(CONFIG.cursorBin, args, {
       env: { ...process.env },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -1590,7 +1558,7 @@ server.listen(CONFIG.port, CONFIG.host, () => {
     : "cursor agent login";
   console.log(`
 ┌──────────────────────────────────────────────────────────┐
-│              cursor-bridge v2.0.0                        │
+│              cursor-bridge v2.1.0                        │
 │    OpenAI-compatible API  →  Cursor CLI Agent            │
 ├──────────────────────────────────────────────────────────┤
 │  Endpoint:   http://${CONFIG.host}:${CONFIG.port}/v1/chat/completions  │

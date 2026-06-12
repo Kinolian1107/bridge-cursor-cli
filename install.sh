@@ -15,7 +15,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ── Defaults (override via env) ──────────────────────────────
 BRIDGE_PORT="${BRIDGE_PORT:-18790}"
-CURSOR_MODEL="${CURSOR_MODEL:-opus-4.6-thinking}"
+CURSOR_MODEL="${CURSOR_MODEL:-auto}"
 CURSOR_WORKSPACE="${CURSOR_WORKSPACE:-$HOME/.cursor-bridge/workspace}"
 OPENCLAW_DIR="${OPENCLAW_DIR:-$HOME/.openclaw}"
 OPENCLAW_CONFIG="$OPENCLAW_DIR/openclaw.json"
@@ -104,7 +104,7 @@ fi
 
 # Defaults (only if not already set by .env)
 export BRIDGE_PORT="${BRIDGE_PORT:-18790}"
-export CURSOR_MODEL="${CURSOR_MODEL:-opus-4.6-thinking}"
+export CURSOR_MODEL="${CURSOR_MODEL:-auto}"
 export CURSOR_BIN="${CURSOR_BIN:-cursor}"
 export CURSOR_WORKSPACE="${CURSOR_WORKSPACE:-$HOME/.cursor-bridge/workspace}"
 export PATH="$HOME/.local/bin:$HOME/.nvm/versions/node/$(node -v 2>/dev/null | sed 's/v//')/bin:$PATH"
