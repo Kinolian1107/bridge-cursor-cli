@@ -43,8 +43,15 @@ if [ -z "$HERMES_BIN" ]; then
 fi
 ok "Hermes Agent: $HERMES_BIN ($("$HERMES_BIN" --version 2>&1 | head -1))"
 
-# ── Check hermes config ──────────────────────────────────────
-[ -f "$HERMES_CONFIG" ] || fail "Hermes config not found: $HERMES_CONFIG"
+# ── Ensure hermes config exists (bootstrap a fresh install) ──
+# First-time, no-Portal path: generate a default config non-interactively so a
+# brand-new Hermes install is never steered into the Nous Portal OAuth wizard.
+if [ ! -f "$HERMES_CONFIG" ]; then
+  warn "No Hermes config found — bootstrapping defaults (no Portal needed)"
+  "$HERMES_BIN" setup --non-interactive >/dev/null 2>&1 || true
+fi
+[ -f "$HERMES_CONFIG" ] || fail "Hermes config not found and bootstrap failed: $HERMES_CONFIG
+   Run 'hermes setup --non-interactive' manually, then re-run this script."
 info "Hermes config: $HERMES_CONFIG"
 
 # ── Check bridge is running ──────────────────────────────────

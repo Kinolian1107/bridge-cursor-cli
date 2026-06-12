@@ -154,6 +154,8 @@ curl "http://127.0.0.1:18790/v1/models?all=1"       # bypass the allowlist
 
 If you use [Hermes Agent](https://github.com/nousresearch/hermes-agent), run `./set-hermesagent.sh` — it configures Hermes to use cursor-bridge and syncs the bridge's model list into Hermes so `/model` shows them.
 
+**First-time install, no Nous Portal?** `./set-hermesagent.sh` bootstraps a fresh Hermes config for you (via `hermes setup --non-interactive`, which never touches the Portal) before pointing it at the bridge — so a brand-new Hermes install works with the same one command. Full walkthrough: **[docs/hermes-setup.md](docs/hermes-setup.md)** ([中文](docs/hermes-setup.zh-TW.md)).
+
 ```bash
 # Make sure cursor-bridge is running first
 ./start.sh daemon

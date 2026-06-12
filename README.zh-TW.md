@@ -154,6 +154,8 @@ curl "http://127.0.0.1:18790/v1/models?all=1"       # 略過 allowlist 取得完
 
 如果你使用 [Hermes Agent](https://github.com/nousresearch/hermes-agent)，執行 `./set-hermesagent.sh` — 它會設定 Hermes 使用 cursor-bridge，並同步 bridge 的模型清單到 Hermes 的 `/model` 選單。
 
+**第一次安裝、不想走 Nous Portal？** `./set-hermesagent.sh` 會在指到 bridge 之前，先幫你 bootstrap 一份全新的 Hermes config（透過 `hermes setup --non-interactive`，完全不碰 Portal）— 所以全新安裝的 Hermes 也是同一行指令搞定。完整手冊：**[docs/hermes-setup.zh-TW.md](docs/hermes-setup.zh-TW.md)**（[English](docs/hermes-setup.md)）。
+
 ```bash
 # 先確認 cursor-bridge 已啟動
 ./start.sh daemon
