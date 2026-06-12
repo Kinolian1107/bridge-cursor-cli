@@ -88,13 +88,16 @@ LazyBun `LlmProvider` 介面新增 `acp` 實作；其他工具仍走 HTTP。
 目前 `CURSOR_BIN` 只能設一個。若使用者有多個 cursor 版本（stable / nightly），
 可考慮 per-request `metadata.cursor_binary` override。
 
-### 2.4 Bridge 自身 telemetry
+### 2.4 Bridge 自身 telemetry ✅（v2.2 部分完成）
 
-目前 logs 只有 stdout/stderr。可考慮：
+✅ v2.2 已實作 `/metrics` Prometheus 端點（`lib/metrics.mjs`）：
+`bridge_requests_total{endpoint,method,status}`、`bridge_request_duration_seconds`
+（sum/count）、`bridge_auth_failures_total`、`bridge_inflight_requests`、`bridge_uptime_seconds`。
+同版本也加了 optional bearer auth（`BRIDGE_API_KEY`，`lib/auth.mjs`）。
+
+剩餘想法：
 - 結構化日誌（JSON line）寫到 `logs/bridge.log`
-- `/metrics` 端點吐 Prometheus（request count / latency histogram / spawn count）
-
-非必要，但若 bridge 上線量大會想看。
+- latency histogram buckets（目前是 summary sum/count）、spawn count 獨立指標
 
 ### 2.5 Health check 強化
 

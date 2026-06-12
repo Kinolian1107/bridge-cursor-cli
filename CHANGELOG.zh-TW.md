@@ -4,6 +4,27 @@ cursor-bridge 的所有版本更新紀錄。
 
 ---
 
+## v2.2（2026-06-13）
+
+**Anthropic Messages API + 可選 bearer auth + Prometheus metrics。完全向下相容。**
+
+### 新增
+
+- **Anthropic Messages API 相容** — 新增 `POST /v1/messages` 端點，講 Anthropic wire format，Anthropic SDK 與 Claude Code 本身（`ANTHROPIC_BASE_URL` → bridge）都能直接使用 Cursor 模型：
+  - Request 轉換（`lib/anthropic-compat.mjs`）：`system`（字串或 blocks）→ system message、assistant `tool_use` blocks → OpenAI `tool_calls`、user `tool_result` blocks → `role:"tool"` messages、`tools[{name,description,input_schema}]` → function tools。轉換後的 request 走與 `/v1/chat/completions` 完全相同的管線，Tool Bridge Mode 與所有 `metadata.cursor_*` per-request 選項照常運作。
+  - Response 透過 res-like adapter 在輸出端改寫：非串流 JSON → Anthropic message（`stop_reason`、`usage.input/output_tokens`）、SSE → 完整 Anthropic event 序列（`message_start` / `content_block_start` / `content_block_delta` / `content_block_stop` / `message_delta` / `message_stop`）、錯誤 → `{type:"error", error:{type, message}}` 並對映錯誤型別。
+  - `POST /v1/messages/count_tokens` 回傳 `input_tokens` 估算值（與 `usage` 欄位同一套 chars-per-token 比例）。
+- **可選 bearer auth**（`lib/auth.mjs`）— 設定 `BRIDGE_API_KEY` 後，除 `/health` 外所有端點都需要帶 key。同時接受 `Authorization: Bearer <key>`（OpenAI 風格）與 `x-api-key: <key>`（Anthropic 風格）；比對使用 timing-safe。不設定（預設）維持 localhost-only 免驗證行為。Auth 錯誤依路徑回傳對應協議的形狀（OpenAI vs Anthropic）。
+- **Prometheus `/metrics`**（`lib/metrics.mjs`，todo 2.4）— text exposition format，提供 `bridge_requests_total{endpoint,method,status}`、`bridge_request_duration_seconds`（各端點 sum/count）、`bridge_auth_failures_total`、`bridge_inflight_requests`、`bridge_uptime_seconds`。endpoint label 有界（未知路徑歸入 `other`）。
+- `/health` 新增 `supports.anthropic_messages`、`supports.bearer_auth`、`supports.metrics`。
+- 新增 38 個單元測試（`tests/anthropic-compat.test.mjs`、`tests/auth.test.mjs`、`tests/metrics.test.mjs`）— 共 81 個。
+
+### 遷移注意事項
+
+- 既有 client 無需任何修改。未設定 `BRIDGE_API_KEY` 前 auth 維持關閉。
+
+---
+
 ## v2.1（2026-06-12）
 
 **Windows 支援 + 模型 allowlist。完全向下相容。**

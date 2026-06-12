@@ -29,8 +29,10 @@
 
 ## 更新日誌
 
-完整版本歷史請見 [CHANGELOG.zh-TW.md](CHANGELOG.zh-TW.md)（v1.0 → v2.1）。
+完整版本歷史請見 [CHANGELOG.zh-TW.md](CHANGELOG.zh-TW.md)（v1.0 → v2.2）。
 
+> **v2.2 重點** — Anthropic Messages API 相容（`POST /v1/messages` — Anthropic SDK 或 Claude Code 的 `ANTHROPIC_BASE_URL` 可直接指向 bridge）、`BRIDGE_API_KEY` 可選 bearer auth（LAN / Tailscale 部署用）、Prometheus `/metrics` 端點。詳見下方 [Anthropic Messages API](#anthropic-messages-apiv22)。
+>
 > **v2.1 重點** — Windows 支援（不再依賴 bash）、`node select-models.mjs` 模型 allowlist（解決 Hermes `/model` 選單 130+ 模型爆量問題）、改用官方 `cursor-agent --list-models` 探測模型、`.env` 自動載入、預設模型改為 `auto`。詳見下方 [模型 Allowlist](#模型-allowlistselect-models)。
 >
 > **v2.0 重點** — 可逐請求帶 `metadata.cursor_*` 旋鈕、模型名前綴 token（`cursor/ask:<model>`）、`--output-format=json|text` 路徑、官方 fingerprint dedup、session 延續端點（`/v1/cursor-sessions/*`）。**完全向下相容**。詳見下方 [逐請求選項（v2.0）](#逐請求選項v20)。
@@ -293,8 +295,13 @@ Bridge 首次呼叫時透過 `cursor-agent --list-models` 探測並快取結果�
 | `/v1/models` | GET | 列出 Cursor 模型（探測 CLI，結果快取）。**v2.1**：會套用 `models.json` allowlist 過濾；加 `?all=1` 取得完整清單 |
 | `/v1/cursor-models` | GET | `/v1/models` 的別名 |
 | `/v1/chat/completions` | POST | 聊天補全（支援串流與非串流） |
+| `/v1/messages` | POST | **v2.2** — Anthropic Messages API（支援串流與非串流），詳見 [Anthropic Messages API](#anthropic-messages-apiv22) |
+| `/v1/messages/count_tokens` | POST | **v2.2** — token 數估算（與 `usage` 欄位同一套估算比例） |
+| `/metrics` | GET | **v2.2** — Prometheus metrics（requests、durations、auth failures、inflight、uptime） |
 | `/v1/cursor-sessions/create` | POST | **v2.0** — 呼叫 `cursor agent create-chat` 建立空 chat，回傳 `{ chat_id }` 給 `metadata.cursor_resume_chat_id` 用 |
 | `/v1/cursor-sessions` | GET | **v2.0** — 透過 `cursor agent ls` 列出歷史 chat |
+
+設定 `BRIDGE_API_KEY` 後，除 `/health` 外所有端點都需要帶 key（見 [Bearer Auth 與 Metrics](#bearer-auth-與-metricsv22)）。
 
 ### 範例
 
@@ -312,6 +319,42 @@ curl http://127.0.0.1:18790/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"auto","messages":[{"role":"user","content":"你好！"}],"stream":true}'
 ```
+
+## Anthropic Messages API（v2.2）
+
+bridge 也支援 **Anthropic Messages API**（`POST /v1/messages`），Anthropic SDK — 甚至 Claude Code 本身 — 都能直接使用 Cursor 模型：
+
+```bash
+# Anthropic SDK（任何語言）：把 base URL 指向 bridge 即可
+export ANTHROPIC_BASE_URL=http://127.0.0.1:18790
+export ANTHROPIC_API_KEY=anything   # 若啟用 auth 則填 BRIDGE_API_KEY
+
+# 直接 curl
+curl http://127.0.0.1:18790/v1/messages \
+  -H "Content-Type: application/json" \
+  -d '{"model":"auto","max_tokens":1024,"messages":[{"role":"user","content":"你好！"}]}'
+```
+
+支援範圍：`system`（字串或 blocks）、多輪對話歷史、`tools` / `tool_use` / `tool_result` 完整循環（走與 OpenAI 路徑相同的 Tool Bridge Mode）、串流 SSE（`message_start` → `content_block_delta` → `message_stop`）、以及 `POST /v1/messages/count_tokens`（估算值）。內部實作是把 request 轉成 OpenAI 形狀走完全相同的管線 — 所有 `metadata.cursor_*` per-request 選項在這裡一樣有效。
+
+## Bearer Auth 與 Metrics（v2.2）
+
+預設 bridge 綁定 `127.0.0.1` 且不驗證 — 本機使用沒問題。要開放到 LAN 或 Tailscale 網段時：
+
+```bash
+# .env
+BRIDGE_HOST=0.0.0.0            # 或你的 Tailscale IP
+BRIDGE_API_KEY=$(openssl rand -hex 32)
+```
+
+設定 `BRIDGE_API_KEY` 後，除 `/health` 外所有端點都需要帶 key，兩種 header 皆可（比對使用 timing-safe）：
+
+```bash
+curl -H "Authorization: Bearer <key>" http://bridge:18790/v1/models   # OpenAI 風格
+curl -H "x-api-key: <key>" http://bridge:18790/v1/messages -d '…'     # Anthropic 風格
+```
+
+`GET /metrics` 提供 Prometheus metrics：`bridge_requests_total{endpoint,method,status}`、`bridge_request_duration_seconds`（各端點 sum/count）、`bridge_auth_failures_total`、`bridge_inflight_requests`、`bridge_uptime_seconds`。
 
 ## 解除安裝
 

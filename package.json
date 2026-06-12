@@ -1,6 +1,6 @@
 {
   "name": "cursor-bridge",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "OpenAI-compatible API proxy for Cursor CLI — use any OpenAI-compatible client to call Cursor AI models",
   "type": "module",
   "main": "cursor-bridge.mjs",

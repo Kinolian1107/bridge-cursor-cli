@@ -29,8 +29,10 @@ Any OpenAI-compatible client
 
 ## Changelog
 
-See [CHANGELOG.md](CHANGELOG.md) for full version history (v1.0 → v2.1).
+See [CHANGELOG.md](CHANGELOG.md) for full version history (v1.0 → v2.2).
 
+> **v2.2 highlights** — Anthropic Messages API compatibility (`POST /v1/messages` — point the Anthropic SDK or Claude Code's `ANTHROPIC_BASE_URL` at the bridge), optional bearer auth via `BRIDGE_API_KEY` for LAN/Tailscale deployments, and a Prometheus `/metrics` endpoint. See [Anthropic Messages API](#anthropic-messages-api-v22) below.
+>
 > **v2.1 highlights** — Windows support (no more bash dependency), model allowlist via `node select-models.mjs` (tames the 130+ model list in Hermes' `/model` menu), model probing via official `cursor-agent --list-models`, `.env` self-loading, default model `auto`. See [Model Allowlist](#model-allowlist-select-models) below.
 >
 > **v2.0 highlights** — per-request `metadata.cursor_*` knobs, model-name prefix tokens (`cursor/ask:<model>`), `--output-format=json|text` paths, official fingerprint dedup, session continuity endpoints (`/v1/cursor-sessions/*`). Fully backwards-compatible. See [Per-request Options (v2.0)](#per-request-options-v20) below.
@@ -293,8 +295,13 @@ Change the default model by setting `CURSOR_MODEL` in `.env` and restarting, or 
 | `/v1/models` | GET | List Cursor models (probed from CLI, cached). **v2.1**: filtered by the `models.json` allowlist; append `?all=1` for the full list |
 | `/v1/cursor-models` | GET | Alias for `/v1/models` |
 | `/v1/chat/completions` | POST | Chat completions (streaming & non-streaming) |
+| `/v1/messages` | POST | **v2.2** — Anthropic Messages API (streaming & non-streaming), see [Anthropic Messages API](#anthropic-messages-api-v22) |
+| `/v1/messages/count_tokens` | POST | **v2.2** — token count estimate (same ratio as the `usage` fields) |
+| `/metrics` | GET | **v2.2** — Prometheus metrics (requests, durations, auth failures, inflight, uptime) |
 | `/v1/cursor-sessions/create` | POST | **v2.0** — spawn `cursor agent create-chat`, returns `{ chat_id }` for `metadata.cursor_resume_chat_id` continuity |
 | `/v1/cursor-sessions` | GET | **v2.0** — list prior chats via `cursor agent ls` |
+
+All endpoints except `/health` require a key when `BRIDGE_API_KEY` is set (see [Bearer Auth](#bearer-auth--metrics-v22)).
 
 ### Examples
 
@@ -312,6 +319,42 @@ curl http://127.0.0.1:18790/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"auto","messages":[{"role":"user","content":"Hello!"}],"stream":true}'
 ```
+
+## Anthropic Messages API (v2.2)
+
+The bridge also speaks the **Anthropic Messages API** (`POST /v1/messages`), so the Anthropic SDK — and Claude Code itself — can consume Cursor models:
+
+```bash
+# Anthropic SDK (any language): just point the base URL at the bridge
+export ANTHROPIC_BASE_URL=http://127.0.0.1:18790
+export ANTHROPIC_API_KEY=anything   # or your BRIDGE_API_KEY if auth is enabled
+
+# Raw curl
+curl http://127.0.0.1:18790/v1/messages \
+  -H "Content-Type: application/json" \
+  -d '{"model":"auto","max_tokens":1024,"messages":[{"role":"user","content":"Hello!"}]}'
+```
+
+Supported: `system` (string or blocks), multi-turn history, `tools` / `tool_use` / `tool_result` round-trips (via the same Tool Bridge Mode as the OpenAI path), streaming SSE (`message_start` → `content_block_delta` → `message_stop`), and `POST /v1/messages/count_tokens` (estimate). Internally the request is translated to the OpenAI shape and runs through the exact same pipeline — all `metadata.cursor_*` per-request options work here too.
+
+## Bearer Auth & Metrics (v2.2)
+
+By default the bridge binds to `127.0.0.1` with no auth — fine for local use. To expose it on a LAN or Tailscale network:
+
+```bash
+# .env
+BRIDGE_HOST=0.0.0.0            # or your Tailscale IP
+BRIDGE_API_KEY=$(openssl rand -hex 32)
+```
+
+With `BRIDGE_API_KEY` set, every endpoint except `/health` requires the key via either header (comparison is timing-safe):
+
+```bash
+curl -H "Authorization: Bearer <key>" http://bridge:18790/v1/models   # OpenAI style
+curl -H "x-api-key: <key>" http://bridge:18790/v1/messages -d '…'     # Anthropic style
+```
+
+`GET /metrics` exposes Prometheus metrics: `bridge_requests_total{endpoint,method,status}`, `bridge_request_duration_seconds` (sum/count per endpoint), `bridge_auth_failures_total`, `bridge_inflight_requests`, and `bridge_uptime_seconds`.
 
 ## Uninstall
 

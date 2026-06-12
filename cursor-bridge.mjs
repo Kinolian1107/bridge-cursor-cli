@@ -1,12 +1,21 @@
 #!/usr/bin/env node
 /**
- * cursor-bridge v2.1 — OpenAI-compatible API proxy for Cursor CLI
+ * cursor-bridge v2.2 — OpenAI-compatible API proxy for Cursor CLI
  *
  * 架構:
  *   Any OpenAI-compatible client  ──(OpenAI API)──►  cursor-bridge (port 18790)  ──►  cursor-agent --print --stream-json
  *
  * 這個代理伺服器提供 OpenAI 相容的 API 格式，
  * 讓任何支援 OpenAI API 的用戶端可以呼叫 Cursor CLI 的 AI 模型。
+ *
+ * v2.2 改進:
+ *   - Anthropic Messages API 相容：POST /v1/messages（+ /v1/messages/count_tokens），
+ *     Anthropic SDK 與 Claude Code（ANTHROPIC_BASE_URL）可直接使用 Cursor 模型。
+ *     轉換層在 lib/anthropic-compat.mjs — request 轉成 OpenAI 形狀走既有管線，
+ *     response adapter 把 OpenAI JSON/SSE 翻譯回 Anthropic 形狀。
+ *   - Optional bearer auth：設 BRIDGE_API_KEY 後除 /health 外全部端點需要
+ *     Authorization: Bearer 或 x-api-key（timing-safe 比對）。
+ *   - Prometheus /metrics：requests/duration/auth failures/inflight/uptime。
  *
  * v2.1 改進:
  *   - Windows 支援：移除 bash/cat 依賴（prompt 直接寫入 stdin）、HOME → os.homedir()、
@@ -61,6 +70,9 @@ import { fileURLToPath } from "node:url";
 import { parseCursorOptions as parseCursorOptionsImpl, parseModelPrefixTokens } from "./lib/parse-cursor-options.mjs";
 import { listCursorModels, filterModels, readSelectedModels } from "./lib/probe-models.mjs";
 import { agentArgs, spawnCursor, spawnCursorWithPrompt } from "./lib/cursor-cli.mjs";
+import { anthropicToOpenAI, createAnthropicResponseAdapter } from "./lib/anthropic-compat.mjs";
+import { isAuthorized } from "./lib/auth.mjs";
+import { createMetrics, endpointLabel } from "./lib/metrics.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -156,6 +168,11 @@ const CONFIG = {
   // present in the request (Tool Bridge Mode), overriding the request model.
   // Set CURSOR_TOOL_BRIDGE_MODEL="" to disable override (use request model instead).
   toolBridgeModel: process.env.CURSOR_TOOL_BRIDGE_MODEL ?? "gpt-5.3-codex-high",
+  // Optional bearer auth: when set, every endpoint except /health requires
+  // `Authorization: Bearer <key>` or `x-api-key: <key>`. Empty (default) = no
+  // auth — fine for the localhost-only threat model; set it before exposing
+  // the bridge on a LAN / Tailscale network.
+  apiKey: process.env.BRIDGE_API_KEY || "",
   // Tool Bridge Agent Mode: cursor-agent mode used when tools are present.
   // "" (default) = full agent mode — cursor-agent can execute shell/file ops natively,
   //                so skills like autohackmd that run bash scripts work correctly.
@@ -1323,19 +1340,67 @@ function runCursorAgent(prompt, requestModel, stream, res, tools, options) {
 
 // ─── HTTP Server ─────────────────────────────────────────────────
 
+const metrics = createMetrics();
+
+/**
+ * Send an Anthropic-shaped error (for /v1/messages* routes, where clients
+ * expect {type:"error", error:{type, message}} instead of the OpenAI shape).
+ */
+function sendAnthropicError(res, status, message, type = "api_error") {
+  res.writeHead(status, {
+    "Content-Type": "application/json",
+    "Access-Control-Allow-Origin": "*",
+  });
+  res.end(JSON.stringify({ type: "error", error: { type, message } }));
+}
+
 const server = createServer(async (req, res) => {
   // CORS preflight
   if (req.method === "OPTIONS") {
     res.writeHead(204, {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, Authorization",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization, x-api-key, anthropic-version",
     });
     res.end();
     return;
   }
 
   const url = new URL(req.url, `http://${CONFIG.host}:${CONFIG.port}`);
+
+  // ── Metrics instrumentation (every request) ──
+  const requestStartMs = Date.now();
+  metrics.incInflight();
+  // 'close' fires for both clean finishes and aborted connections.
+  res.once("close", () => {
+    metrics.decInflight();
+    metrics.recordRequest({
+      endpoint: endpointLabel(url.pathname),
+      method: req.method,
+      status: res.statusCode,
+      durationMs: Date.now() - requestStartMs,
+    });
+  });
+
+  // ── Optional bearer auth (BRIDGE_API_KEY) — /health stays public ──
+  const isPublicPath = url.pathname === "/health" || url.pathname === "/";
+  if (CONFIG.apiKey && !isPublicPath && !isAuthorized(req.headers, CONFIG.apiKey)) {
+    metrics.incAuthFailure();
+    const message = "Missing or invalid API key (use Authorization: Bearer <key> or x-api-key)";
+    if (url.pathname.startsWith("/v1/messages")) {
+      sendAnthropicError(res, 401, message, "authentication_error");
+    } else {
+      sendError(res, 401, message, "auth");
+    }
+    return;
+  }
+
+  // ── GET /metrics — Prometheus text exposition format ──
+  if (url.pathname === "/metrics" && req.method === "GET") {
+    res.writeHead(200, { "Content-Type": "text/plain; version=0.0.4; charset=utf-8" });
+    res.end(metrics.render());
+    return;
+  }
 
   // ── Health check ──
   if (
@@ -1350,7 +1415,7 @@ const server = createServer(async (req, res) => {
       JSON.stringify({
         status: "ok",
         service: "cursor-bridge",
-        version: "2.1.0",
+        version: "2.2.0",
         model: CONFIG.cursorModel,
         mode: CONFIG.mode || "agent",
         outputFormat: "stream-json",
@@ -1364,6 +1429,10 @@ const server = createServer(async (req, res) => {
           // v2.1 — models.json allowlist filters /v1/models (?all=1 bypasses)
           model_allowlist: true,
           windows: true,
+          // v2.2 — Anthropic Messages API + optional bearer auth + Prometheus metrics
+          anthropic_messages: true,
+          bearer_auth: !!CONFIG.apiKey,
+          metrics: true,
         },
       })
     );
@@ -1464,6 +1533,75 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  // ── POST /v1/messages ── (Anthropic Messages API compatibility)
+  // Lets the Anthropic SDK and Claude Code itself (ANTHROPIC_BASE_URL → bridge)
+  // consume Cursor models. The request is translated to the OpenAI shape and
+  // fed through the existing pipeline; a response adapter rewrites the OpenAI
+  // JSON/SSE output back to Anthropic shape on the way out.
+  if (url.pathname === "/v1/messages" && req.method === "POST") {
+    let body;
+    try {
+      body = await readBody(req);
+    } catch {
+      sendAnthropicError(res, 400, "Failed to read request body", "invalid_request_error");
+      return;
+    }
+
+    let data;
+    try {
+      data = JSON.parse(body);
+    } catch {
+      sendAnthropicError(res, 400, "Invalid JSON in request body", "invalid_request_error");
+      return;
+    }
+
+    const converted = anthropicToOpenAI(data);
+    const stream = converted.stream;
+    const tools = converted.tools;
+    const cursorOpts = parseCursorOptions(converted, stream, tools.length > 0);
+
+    verboseLog("ANTHROPIC_REQUEST_PARAMS", {
+      model: data.model,
+      stream,
+      max_tokens: data.max_tokens,
+      tools_count: tools.length,
+      messages_count: converted.messages.length,
+      messages: converted.messages,
+      cursor_opts: cursorOpts,
+    });
+
+    if (!converted.messages.some((m) => m.role !== "system")) {
+      sendAnthropicError(res, 400, "No messages provided", "invalid_request_error");
+      return;
+    }
+
+    const prompt = messagesToPrompt(converted.messages, tools);
+    if (!prompt.trim()) {
+      sendAnthropicError(res, 400, "Empty prompt after processing messages", "invalid_request_error");
+      return;
+    }
+
+    const adapted = createAnthropicResponseAdapter(res, { model: data.model });
+    runCursorAgent(prompt, converted.model, stream, adapted, tools, cursorOpts);
+    return;
+  }
+
+  // ── POST /v1/messages/count_tokens ── (estimate, same ratio as usage fields)
+  if (url.pathname === "/v1/messages/count_tokens" && req.method === "POST") {
+    let data;
+    try {
+      data = JSON.parse(await readBody(req));
+    } catch {
+      sendAnthropicError(res, 400, "Invalid JSON in request body", "invalid_request_error");
+      return;
+    }
+    const converted = anthropicToOpenAI(data);
+    const prompt = messagesToPrompt(converted.messages, converted.tools);
+    res.writeHead(200, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
+    res.end(JSON.stringify({ input_tokens: estimateTokens(prompt) }));
+    return;
+  }
+
   // ── POST /v1/cursor-sessions/create ── (Step 5 — session continuity)
   // Spawns `cursor agent create-chat` and returns { chat_id }. Auth-free.
   if (url.pathname === "/v1/cursor-sessions/create" && req.method === "POST") {
@@ -1545,10 +1683,13 @@ server.listen(CONFIG.port, CONFIG.host, () => {
     : "cursor agent login";
   console.log(`
 ┌──────────────────────────────────────────────────────────┐
-│              cursor-bridge v2.1.0                        │
+│              cursor-bridge v2.2.0                        │
 │    OpenAI-compatible API  →  Cursor CLI Agent            │
 ├──────────────────────────────────────────────────────────┤
 │  Endpoint:   http://${CONFIG.host}:${CONFIG.port}/v1/chat/completions  │
+│  Anthropic:  /v1/messages (set ANTHROPIC_BASE_URL here)  │
+│  Metrics:    /metrics (Prometheus)                        │
+│  APIKey:     ${(CONFIG.apiKey ? "required (BRIDGE_API_KEY)" : "none — keep bridge on localhost").padEnd(43)}│
 │  Model:      ${CONFIG.cursorModel.padEnd(43)}│
 │  Mode:       ${modeLabel.padEnd(43)}│
 │  Worktree:   ${(CONFIG.worktree ? "enabled" : "disabled").padEnd(43)}│

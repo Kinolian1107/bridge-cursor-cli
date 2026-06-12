@@ -4,6 +4,27 @@ All notable changes to cursor-bridge are documented here.
 
 ---
 
+## v2.2 (2026-06-13)
+
+**Anthropic Messages API + optional bearer auth + Prometheus metrics. Fully backwards-compatible.**
+
+### Added
+
+- **Anthropic Messages API compatibility** — new `POST /v1/messages` endpoint speaks the Anthropic wire format, so the Anthropic SDK and Claude Code itself (`ANTHROPIC_BASE_URL` → bridge) can consume Cursor models:
+  - Request translation (`lib/anthropic-compat.mjs`): `system` (string or blocks) → system message, assistant `tool_use` blocks → OpenAI `tool_calls`, user `tool_result` blocks → `role:"tool"` messages, `tools[{name,description,input_schema}]` → function tools. The converted request runs through the exact same pipeline as `/v1/chat/completions`, so Tool Bridge Mode and all `metadata.cursor_*` per-request options work unchanged.
+  - Response translation via a res-like adapter that rewrites the OpenAI output on the way out: non-streaming JSON → Anthropic message (`stop_reason`, `usage.input/output_tokens`), SSE → the full Anthropic event sequence (`message_start` / `content_block_start` / `content_block_delta` / `content_block_stop` / `message_delta` / `message_stop`), errors → `{type:"error", error:{type, message}}` with mapped error types.
+  - `POST /v1/messages/count_tokens` returns an `input_tokens` estimate (same chars-per-token ratio as the `usage` fields).
+- **Optional bearer auth** (`lib/auth.mjs`) — set `BRIDGE_API_KEY` to require a key on every endpoint except `/health`. Accepts both `Authorization: Bearer <key>` (OpenAI style) and `x-api-key: <key>` (Anthropic style); comparison is timing-safe. Unset (default) keeps the localhost-only zero-auth behaviour. Auth errors are shaped per-protocol (OpenAI vs Anthropic) depending on the path.
+- **Prometheus `/metrics`** (`lib/metrics.mjs`, todo 2.4) — text exposition format with `bridge_requests_total{endpoint,method,status}`, `bridge_request_duration_seconds` (sum/count per endpoint), `bridge_auth_failures_total`, `bridge_inflight_requests`, `bridge_uptime_seconds`. Endpoint labels are bounded (unknown paths collapse into `other`).
+- `/health` adds `supports.anthropic_messages`, `supports.bearer_auth`, `supports.metrics`.
+- 38 new unit tests (`tests/anthropic-compat.test.mjs`, `tests/auth.test.mjs`, `tests/metrics.test.mjs`) — 81 total.
+
+### Migration notes
+
+- No changes required for existing clients. Auth stays off until you set `BRIDGE_API_KEY`.
+
+---
+
 ## v2.1 (2026-06-12)
 
 **Windows support + model allowlist. Fully backwards-compatible.**
