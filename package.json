@@ -8,7 +8,7 @@
     "start": "node cursor-bridge.mjs",
     "dev": "node --watch cursor-bridge.mjs",
     "models": "node select-models.mjs",
-    "test": "node tests/parse-options.test.mjs && node tests/probe-models.test.mjs"
+    "test": "node --test"
   },
   "engines": {
     "node": ">=22"

@@ -27,6 +27,7 @@ import { spawnSync } from "node:child_process";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { listCursorModels, readSelectedModels } from "./lib/probe-models.mjs";
+import { patchOpenClawConfig, OPENCLAW_PROVIDER } from "./lib/sync-openclaw.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -42,7 +43,6 @@ const MODELS_FILE = process.env.BRIDGE_MODELS_FILE || join(SCRIPT_DIR, "models.j
 const HERMES_CONFIG = join(process.env.HERMES_DIR || join(homedir(), ".hermes"), "config.yaml");
 const OPENCLAW_CONFIG = join(process.env.OPENCLAW_DIR || join(homedir(), ".openclaw"), "openclaw.json");
 const HERMES_PROVIDER = "bridge-cursor-cli";
-const OPENCLAW_PROVIDER = "cursor-cli";
 const BASE_URL = `http://127.0.0.1:${BRIDGE_PORT}/v1`;
 
 // ─── allowlist persistence ───────────────────────────────────────
@@ -64,9 +64,9 @@ function backupOnce(path) {
 }
 
 /**
- * Rewrite Hermes custom_providers (YAML) with one entry per selected model.
- * YAML editing is delegated to python+pyyaml — Hermes itself is a Python tool,
- * so python with pyyaml is reliably present wherever Hermes is installed.
+ * Sync the selection into Hermes via the shared lib/sync-hermes.py script
+ * (also used by set-hermesagent.sh — the YAML rewrite policy lives there).
+ * python+pyyaml is reliably present wherever Hermes (a Python tool) is.
  */
 function syncHermes(selected) {
   if (!existsSync(HERMES_CONFIG)) {
@@ -75,34 +75,10 @@ function syncHermes(selected) {
   }
   backupOnce(HERMES_CONFIG);
 
-  const py = `
-import sys, json, yaml
-config_path, models_json, base_url, provider = sys.argv[1:5]
-models = json.loads(models_json)
-with open(config_path, encoding="utf-8") as f:
-    cfg = yaml.safe_load(f) or {}
-kept = [p for p in (cfg.get("custom_providers") or []) if p.get("name") != provider]
-cfg["custom_providers"] = kept + [
-    {"name": provider, "base_url": base_url, "api_key": "",
-     "api_mode": "chat_completions", "model": m}
-    for m in models
-]
-# Keep model.default valid: only touch it when it points at this bridge
-# and names a model that is no longer in the allowlist (e.g. a removed id).
-top = cfg.get("model") or {}
-if top.get("base_url") == base_url and models and top.get("default") not in models:
-    old = top.get("default")
-    top["default"] = models[0]
-    cfg["model"] = top
-    print(f"  default model {old} not in allowlist -> switched to {models[0]}")
-with open(config_path, "w", encoding="utf-8") as f:
-    yaml.dump(cfg, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
-print(f"  -> {len(models)} models written for {provider}")
-`;
-
+  const script = join(SCRIPT_DIR, "lib", "sync-hermes.py");
   const candidates = process.platform === "win32" ? ["python", "py", "python3"] : ["python3", "python"];
   for (const bin of candidates) {
-    const r = spawnSync(bin, ["-c", py, HERMES_CONFIG, JSON.stringify(selected), BASE_URL, HERMES_PROVIDER], {
+    const r = spawnSync(bin, [script, HERMES_CONFIG, JSON.stringify(selected), BASE_URL, HERMES_PROVIDER], {
       encoding: "utf-8",
     });
     if (r.error) continue; // binary not found — try next
@@ -120,7 +96,8 @@ print(f"  -> {len(models)} models written for {provider}")
 }
 
 /**
- * Patch OpenClaw's JSON config: replace the cursor-cli provider's model list.
+ * Sync the selection into OpenClaw via the shared lib/sync-openclaw.mjs patch
+ * (also used by set-openclaw.sh — the patch policy lives there).
  */
 function syncOpenClaw(selected) {
   if (!existsSync(OPENCLAW_CONFIG)) {
@@ -130,36 +107,13 @@ function syncOpenClaw(selected) {
   backupOnce(OPENCLAW_CONFIG);
 
   const config = JSON.parse(readFileSync(OPENCLAW_CONFIG, "utf-8"));
-  config.models = config.models || {};
-  config.models.providers = config.models.providers || {};
-  const provider = config.models.providers[OPENCLAW_PROVIDER] || {
-    api: "openai-completions",
-    apiKey: "cursor-bridge-local",
+  const { config: patched, notes } = patchOpenClawConfig(config, selected, {
+    provider: OPENCLAW_PROVIDER,
     baseUrl: BASE_URL,
-  };
-  provider.models = selected.map((id) => ({
-    id,
-    name: `Cursor (${id})`,
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 200000,
-    maxTokens: 65536,
-  }));
-  config.models.providers[OPENCLAW_PROVIDER] = provider;
+  });
+  for (const note of notes) console.log(`  ${note}`);
 
-  // Keep the default model valid: only touch it if missing or now out of list.
-  const defaults = config.agents?.defaults?.model;
-  const primary = defaults?.primary;
-  if (primary?.startsWith(`${OPENCLAW_PROVIDER}/`)) {
-    const currentModel = primary.slice(OPENCLAW_PROVIDER.length + 1);
-    if (!selected.includes(currentModel) && selected.length) {
-      defaults.primary = `${OPENCLAW_PROVIDER}/${selected[0]}`;
-      console.log(`  default model ${currentModel} not in allowlist → switched to ${selected[0]}`);
-    }
-  }
-
-  writeFileSync(OPENCLAW_CONFIG, JSON.stringify(config, null, 2) + "\n", "utf-8");
+  writeFileSync(OPENCLAW_CONFIG, JSON.stringify(patched, null, 2) + "\n", "utf-8");
   console.log(`✓ OpenClaw synced (${OPENCLAW_CONFIG})`);
   console.log("  restart to apply: openclaw gateway stop && openclaw gateway");
   return true;
@@ -251,12 +205,8 @@ function interactivePick(models, preselected) {
       const s = key.toString();
       const list = visible();
 
-      if (s === "\x03" || s === "\x1b" || s === "q") {
-        // Ctrl-C / esc / q — but esc may prefix arrow sequences, check length
-        if (s === "\x1b") return finish(null);
-        if (s === "q" && !filter) return finish(null);
-        if (s === "\x03") return finish(null);
-      }
+      if (s === "\x03" || s === "\x1b") return finish(null); // Ctrl-C / bare esc
+      if (s === "q" && !filter) return finish(null); // q appends to a non-empty filter instead
       if (s === "\x1b[A" || s === "\x1bOA") { cursor = Math.max(0, cursor - 1); return render(); }
       if (s === "\x1b[B" || s === "\x1bOB") { cursor = Math.min(list.length - 1, cursor + 1); return render(); }
       if (s === "\x1b[5~") { cursor = Math.max(0, cursor - pageSize()); return render(); }   // PgUp
@@ -267,17 +217,13 @@ function interactivePick(models, preselected) {
         if (m) selected.has(m.id) ? selected.delete(m.id) : selected.add(m.id);
         return render();
       }
-      if (s === "a" && !filterCaptures()) { for (const m of list) selected.add(m.id); return render(); }
-      if (s === "n" && !filterCaptures()) { for (const m of list) selected.delete(m.id); return render(); }
+      // a/n (like q above) act as commands only while no filter text exists;
+      // otherwise they fall through and append to the filter.
+      if (s === "a" && !filter) { for (const m of list) selected.add(m.id); return render(); }
+      if (s === "n" && !filter) { for (const m of list) selected.delete(m.id); return render(); }
       if (s === "\x7f" || s === "\b") { filter = filter.slice(0, -1); cursor = 0; scrollTop = 0; return render(); }
       // printable chars build the filter (model ids: letters, digits, . - _ /)
       if (/^[a-z0-9.\-_/]$/i.test(s)) { filter += s; cursor = 0; scrollTop = 0; return render(); }
-    }
-
-    // When a filter is being typed, "a"/"n" should append to the filter rather
-    // than toggling — only treat them as commands when no filter text exists.
-    function filterCaptures() {
-      return filter.length > 0;
     }
 
     process.stdin.setRawMode(true);
@@ -304,7 +250,7 @@ async function main() {
   }
 
   if (has("--sync")) {
-    const selected = readSelectedModels(MODELS_FILE);
+    const selected = await readSelectedModels(MODELS_FILE);
     if (!selected.length) {
       console.error(`No allowlist in ${MODELS_FILE} — run \`node select-models.mjs\` first.`);
       process.exitCode = 1;
@@ -332,8 +278,9 @@ async function main() {
   const setArg = argValue("--set");
   if (setArg) {
     const wanted = setArg.split(",").map((s) => s.trim()).filter(Boolean);
-    const valid = wanted.filter((id) => models.some((m) => m.id === id));
-    const invalid = wanted.filter((id) => !valid.includes(id));
+    const knownIds = new Set(models.map((m) => m.id));
+    const valid = wanted.filter((id) => knownIds.has(id));
+    const invalid = wanted.filter((id) => !knownIds.has(id));
     if (invalid.length) console.warn(`⚠ Unknown model id(s) skipped: ${invalid.join(", ")}`);
     if (!valid.length) {
       console.error("✗ No valid model ids — nothing written.");
@@ -351,7 +298,7 @@ async function main() {
     return;
   }
 
-  const previous = readSelectedModels(MODELS_FILE);
+  const previous = await readSelectedModels(MODELS_FILE);
   const picked = await interactivePick(models, previous);
   if (picked === null) {
     console.log("Cancelled — no changes written.");

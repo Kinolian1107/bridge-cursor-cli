@@ -7,13 +7,12 @@ param([string]$Mode = "")
 
 $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$PidFile = Join-Path $ScriptDir "cursor-bridge.pid"
 
 # Read BRIDGE_PORT from .env for the health check (default 18790)
 $BridgePort = 18790
 $EnvFile = Join-Path $ScriptDir ".env"
 if (Test-Path $EnvFile) {
-    $portLine = Select-String -Path $EnvFile -Pattern '^\s*BRIDGE_PORT\s*=\s*(\d+)' | Select-Object -First 1
+    $portLine = Select-String -Path $EnvFile -Pattern '^\s*BRIDGE_PORT\s*=\s*"?(\d+)"?' | Select-Object -First 1
     if ($portLine) { $BridgePort = [int]$portLine.Matches[0].Groups[1].Value }
 }
 if ($env:BRIDGE_PORT) { $BridgePort = [int]$env:BRIDGE_PORT }
@@ -31,7 +30,6 @@ if ($Mode -eq "daemon") {
     Write-Host "Starting cursor-bridge in background..."
     $proc = Start-Process node -ArgumentList "`"$(Join-Path $ScriptDir 'cursor-bridge.mjs')`"" `
         -WorkingDirectory $ScriptDir -WindowStyle Hidden -PassThru
-    $proc.Id | Out-File -FilePath $PidFile -Encoding ascii
     Write-Host "cursor-bridge started (PID $($proc.Id))"
     Start-Sleep -Seconds 2
     try {

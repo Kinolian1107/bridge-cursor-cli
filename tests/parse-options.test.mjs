@@ -1,25 +1,11 @@
 // Unit tests for parseCursorOptions and parseModelPrefixTokens.
-// Run: node tests/parse-options.test.mjs
+// Run: npm test (node --test)
 
 import assert from "node:assert/strict";
+import { test } from "node:test";
 import { parseCursorOptions, parseModelPrefixTokens } from "../lib/parse-cursor-options.mjs";
 
 const config = { mode: "", worktree: false };
-let pass = 0;
-let fail = 0;
-
-function test(name, fn) {
-  try {
-    fn();
-    console.log(`  ✓ ${name}`);
-    pass++;
-  } catch (err) {
-    console.error(`  ✗ ${name}\n      ${err.message}`);
-    fail++;
-  }
-}
-
-console.log("parseModelPrefixTokens");
 
 test("strips cursor/ provider prefix", () => {
   const r = parseModelPrefixTokens("cursor/opus-4.6-thinking");
@@ -55,8 +41,6 @@ test("returns null bare for empty", () => {
   const r = parseModelPrefixTokens("");
   assert.equal(r.bare, null);
 });
-
-console.log("\nparseCursorOptions");
 
 test("defaults — empty body, no stream, no tools", () => {
   const o = parseCursorOptions({}, false, false, config);
@@ -152,6 +136,3 @@ test("metadata.cursor_trust=false flips default", () => {
   const o = parseCursorOptions({ metadata: { cursor_trust: false } }, false, false, config);
   assert.equal(o.trust, false);
 });
-
-console.log(`\n${pass} passed, ${fail} failed`);
-process.exit(fail > 0 ? 1 : 0);

@@ -113,39 +113,10 @@ if [ -n "$AVAILABLE_MODELS" ]; then
     | node -e "const d=require('fs').readFileSync('/dev/stdin','utf-8'); const j=JSON.parse(d); process.stdout.write(JSON.stringify(j.data.map(m=>m.id)))" 2>/dev/null || echo "[]")
 
   if [ "$MODELS_JSON" != "[]" ] && [ -n "$MODELS_JSON" ]; then
-    python3 - "$HERMES_CONFIG" "$MODELS_JSON" "http://127.0.0.1:${BRIDGE_PORT}/v1" <<'PYEOF'
-import sys, json, yaml
-
-config_path = sys.argv[1]
-models      = json.loads(sys.argv[2])
-base_url    = sys.argv[3]
-PROVIDER_NAME = "bridge-cursor-cli"
-
-with open(config_path, encoding="utf-8") as f:
-    cfg = yaml.safe_load(f)
-
-existing = cfg.get("custom_providers") or []
-# Keep non-bridge-cursor-cli entries intact
-kept = [p for p in existing if p.get("name") != PROVIDER_NAME]
-# Build one entry per model
-new_entries = [
-    {
-        "name":     PROVIDER_NAME,
-        "base_url": base_url,
-        "api_key":  "",
-        "api_mode": "chat_completions",
-        "model":    m,
-    }
-    for m in models
-]
-cfg["custom_providers"] = kept + new_entries
-
-with open(config_path, "w", encoding="utf-8") as f:
-    yaml.dump(cfg, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
-
-print(f"  → {len(new_entries)} models written for {PROVIDER_NAME}")
-PYEOF
-    ok "Hermes custom_providers updated with $(echo "$MODELS_JSON" | node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('/dev/stdin','utf-8')).length+'')" 2>/dev/null) models"
+    # Shared with `node select-models.mjs` — the YAML rewrite policy lives there.
+    python3 "$SCRIPT_DIR/lib/sync-hermes.py" \
+      "$HERMES_CONFIG" "$MODELS_JSON" "http://127.0.0.1:${BRIDGE_PORT}/v1" "bridge-cursor-cli"
+    ok "Hermes custom_providers updated"
   else
     warn "Could not parse model list from bridge, skipping custom_providers update"
   fi

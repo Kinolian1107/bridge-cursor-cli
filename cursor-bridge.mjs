@@ -60,7 +60,7 @@ import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { parseCursorOptions as parseCursorOptionsImpl, parseModelPrefixTokens } from "./lib/parse-cursor-options.mjs";
 import { listCursorModels, filterModels, readSelectedModels } from "./lib/probe-models.mjs";
-import { IS_WINDOWS, agentArgs, spawnCursor } from "./lib/cursor-cli.mjs";
+import { agentArgs, spawnCursor, spawnCursorWithPrompt } from "./lib/cursor-cli.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -167,23 +167,31 @@ const CONFIG = {
 
 // Cache for available Cursor models (populated on first request)
 let _cachedModels = null;
+let _probePromise = null;
+let _probeFailedAt = 0;
+const PROBE_RETRY_MS = 30_000; // back off after a failed probe (each one costs a CLI spawn)
 
 /**
  * Probe the Cursor CLI for available models via `--list-models`
  * (lib/probe-models.mjs handles the legacy stderr fallback).
- * Result is cached after the first successful probe.
+ * Cached after the first successful probe; concurrent callers share one
+ * in-flight probe, and failures are negative-cached for PROBE_RETRY_MS.
  */
-async function probeAvailableModels() {
-  if (_cachedModels?.length) return _cachedModels;
-  const models = await listCursorModels({ cursorBin: CONFIG.cursorBin });
-  if (models.length) {
-    _cachedModels = models;
-    console.log(`[cursor-bridge] Probed ${models.length} available models from Cursor CLI`);
-  } else {
-    // Probe failed — don't cache so the next request retries
-    console.warn("[cursor-bridge] Could not probe available models from Cursor CLI");
-  }
-  return models;
+function probeAvailableModels() {
+  if (_cachedModels) return Promise.resolve(_cachedModels);
+  if (!_probePromise && Date.now() - _probeFailedAt < PROBE_RETRY_MS) return Promise.resolve([]);
+  _probePromise ??= listCursorModels({ cursorBin: CONFIG.cursorBin }).then((models) => {
+    _probePromise = null;
+    if (models.length) {
+      _cachedModels = models;
+      console.log(`[cursor-bridge] Probed ${models.length} available models from Cursor CLI`);
+    } else {
+      _probeFailedAt = Date.now();
+      console.warn("[cursor-bridge] Could not probe available models from Cursor CLI");
+    }
+    return models;
+  });
+  return _probePromise;
 }
 
 // Tools that cursor-agent already has natively (no need to inject)
@@ -659,17 +667,16 @@ function runCursorAgent(prompt, requestModel, stream, res, tools, options) {
     args.push("--continue");
   }
 
-  // Decide how to pass the prompt.
-  // Windows: always via stdin (cmd.exe command-line limit + .cmd quoting hazards).
-  // POSIX: via stdin only above maxArgLen (Linux MAX_ARG_STRLEN / E2BIG).
-  const useStdinPipe = IS_WINDOWS || prompt.length > CONFIG.maxArgLen;
-
-  if (!useStdinPipe) {
-    args.push(prompt);
-  }
-
   const startTime = Date.now();
   const promptTokensEst = estimateTokens(prompt);
+
+  // spawnCursorWithPrompt decides arg-vs-stdin delivery and feeds stdin itself.
+  const { proc, useStdinPipe } = spawnCursorWithPrompt(CONFIG.cursorBin, args, prompt, {
+    maxArgLen: CONFIG.maxArgLen,
+    env: { ...process.env },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+
   console.log(
     `[${new Date().toISOString()}] ▶ Request ${requestId.slice(-8)}: stream=${stream}, prompt_len=${prompt.length}, est_tokens=${promptTokensEst}, method=${useStdinPipe ? "stdin-pipe" : "arg"}, model=${model}`
   );
@@ -677,19 +684,9 @@ function runCursorAgent(prompt, requestModel, stream, res, tools, options) {
   // Log the full cursor-cli command and prompt
   verboseLog(`${requestId.slice(-8)}:CURSOR_CMD`,
     `${CONFIG.cursorBin} ${args.map(a => a.includes(" ") ? `'${a}'` : a).join(" ")}`
-    + (useStdinPipe ? `\n[prompt via stdin pipe]` : "")
+    + (useStdinPipe ? `\n[prompt via stdin pipe]` : `\n[prompt appended as last argument]`)
   );
   verboseLog(`${requestId.slice(-8)}:PROMPT`, prompt);
-
-  const spawnOpts = {
-    env: { ...process.env },
-    stdio: ["pipe", "pipe", "pipe"],
-  };
-
-  const proc = spawnCursor(CONFIG.cursorBin, args, spawnOpts);
-  // Ignore EPIPE etc. if the process dies before consuming stdin;
-  // the 'error'/'close' handlers below produce the actual error response.
-  proc.stdin.on("error", () => {});
 
   let stderrOutput = "";
   let killed = false;
@@ -1130,8 +1127,6 @@ function runCursorAgent(prompt, requestModel, stream, res, tools, options) {
         );
         sendError(res, classified.status, classified.message, classified.type);
       });
-      if (useStdinPipe) proc.stdin.write(prompt);
-      proc.stdin.end();
       return;
     }
 
@@ -1324,13 +1319,6 @@ function runCursorAgent(prompt, requestModel, stream, res, tools, options) {
       sendError(res, classified.status, classified.message, classified.type);
     });
   }
-
-  // Feed the prompt via stdin when piping (replaces the old bash `cat | cursor` —
-  // works on Windows too); otherwise just close stdin.
-  if (useStdinPipe) {
-    proc.stdin.write(prompt);
-  }
-  proc.stdin.end();
 }
 
 // ─── HTTP Server ─────────────────────────────────────────────────
@@ -1389,14 +1377,13 @@ const server = createServer(async (req, res) => {
     (url.pathname === "/v1/models" || url.pathname === "/v1/cursor-models") &&
     req.method === "GET"
   ) {
-    const probed = await probeAvailableModels();
     const showAll = url.searchParams.get("all") === "1" || url.searchParams.get("all") === "true";
     // Re-read models.json on every request so select-models takes effect without restart.
-    const selected = showAll ? [] : readSelectedModels(CONFIG.modelsFile);
-    const filtered = filterModels(probed, selected);
-    // If the allowlist filters everything out (e.g. all selected ids renamed
-    // away by Cursor), fall back to the full probed list rather than none.
-    const models = filtered.length ? filtered : probed;
+    const [probed, selected] = await Promise.all([
+      probeAvailableModels(),
+      showAll ? [] : readSelectedModels(CONFIG.modelsFile),
+    ]);
+    const models = filterModels(probed, selected);
     const now = Math.floor(Date.now() / 1000);
     res.writeHead(200, {
       "Content-Type": "application/json",

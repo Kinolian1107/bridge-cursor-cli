@@ -68,59 +68,21 @@ else
   ok "Backed up to $BACKUP"
 fi
 
-# ── Build model list for provider ───────────────────────────
+# ── Build model id list for provider ────────────────────────
 # /v1/models honours the allowlist in models.json — run
 # `node select-models.mjs` first to trim the provider model list.
-# Start with the default model; add extra well-known names if bridge is up
-MODELS_JSON="[{\"id\": \"${CURSOR_MODEL}\", \"name\": \"Cursor (${CURSOR_MODEL})\", \"reasoning\": true, \"input\": [\"text\"], \"cost\": {\"input\": 0, \"output\": 0, \"cacheRead\": 0, \"cacheWrite\": 0}, \"contextWindow\": 200000, \"maxTokens\": 65536}]"
+# Fall back to just the default model when the bridge is down.
+MODEL_IDS_JSON="[\"${CURSOR_MODEL}\"]"
 
 if [ -n "$AVAILABLE_MODELS" ]; then
-  MODELS_JSON=$(curl -sf "http://127.0.0.1:${BRIDGE_PORT}/v1/models" \
-    | node -e "
-const d = require('fs').readFileSync('/dev/stdin', 'utf-8');
-const j = JSON.parse(d);
-const models = j.data.map(m => ({
-  id: m.id,
-  name: 'Cursor (' + m.id + ')',
-  reasoning: true,
-  input: ['text'],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 200000,
-  maxTokens: 65536
-}));
-console.log(JSON.stringify(models));
-" 2>/dev/null || echo "$MODELS_JSON")
+  MODEL_IDS_JSON=$(curl -sf "http://127.0.0.1:${BRIDGE_PORT}/v1/models" \
+    | node -e "const d=require('fs').readFileSync('/dev/stdin','utf-8'); process.stdout.write(JSON.stringify(JSON.parse(d).data.map(m=>m.id)))" 2>/dev/null || echo "$MODEL_IDS_JSON")
 fi
 
 # ── Patch openclaw.json ──────────────────────────────────────
-node -e "
-const fs = require('fs');
-const configPath = process.argv[1];
-const bridgePort = process.argv[2];
-const cursorModel = process.argv[3];
-const providerName = process.argv[4];
-const modelsJson = process.argv[5];
-
-const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-
-config.models = config.models || {};
-config.models.providers = config.models.providers || {};
-config.models.providers[providerName] = {
-  api: 'openai-completions',
-  apiKey: 'cursor-bridge-local',
-  baseUrl: 'http://127.0.0.1:' + bridgePort + '/v1',
-  models: JSON.parse(modelsJson),
-};
-
-// Set as default model if agent defaults exist
-config.agents = config.agents || {};
-config.agents.defaults = config.agents.defaults || {};
-config.agents.defaults.model = config.agents.defaults.model || {};
-config.agents.defaults.model.primary = providerName + '/' + cursorModel;
-
-fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
-console.log('Patched ' + configPath);
-" "$OPENCLAW_CONFIG" "$BRIDGE_PORT" "$CURSOR_MODEL" "$PROVIDER_NAME" "$MODELS_JSON"
+# Shared with `node select-models.mjs` — the patch policy lives there.
+node "$SCRIPT_DIR/lib/sync-openclaw.mjs" \
+  "$OPENCLAW_CONFIG" "$MODEL_IDS_JSON" "http://127.0.0.1:${BRIDGE_PORT}/v1" "$CURSOR_MODEL"
 
 ok "OpenClaw config patched (provider: ${PROVIDER_NAME}, default: ${PROVIDER_NAME}/${CURSOR_MODEL})"
 

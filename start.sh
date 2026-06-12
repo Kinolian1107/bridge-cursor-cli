@@ -8,16 +8,12 @@ PIDFILE="$SCRIPT_DIR/cursor-bridge.pid"
 mkdir -p "$SCRIPT_DIR/logs"
 LOGFILE="$SCRIPT_DIR/logs/cursor-bridge.$(date +%Y%m%d).log"
 
-# Load .env if present (overrides defaults)
+# The bridge loads .env itself (CURSOR_MODEL/CURSOR_BIN/... defaults live there);
+# this script only needs BRIDGE_PORT for the port check and health curl.
 if [ -f "$SCRIPT_DIR/.env" ]; then
   set -a; source "$SCRIPT_DIR/.env"; set +a
 fi
-
-# Defaults (only if not already set by .env)
-export BRIDGE_PORT="${BRIDGE_PORT:-18790}"
-export CURSOR_MODEL="${CURSOR_MODEL:-auto}"
-export CURSOR_BIN="${CURSOR_BIN:-cursor}"
-export CURSOR_WORKSPACE="${CURSOR_WORKSPACE:-$HOME/.cursor-bridge/workspace}"
+BRIDGE_PORT="${BRIDGE_PORT:-18790}"
 export PATH="$HOME/.local/bin:$HOME/.nvm/versions/node/$(node -v 2>/dev/null | sed 's/v//')/bin:$PATH"
 
 # 用 pgrep 偵測所有執行中的實例（不依賴 PID 文件）
