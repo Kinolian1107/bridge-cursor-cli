@@ -2,7 +2,7 @@
 
 # cursor-bridge
 
-Turn your **Cursor subscription** into a local AI API server. cursor-bridge wraps the [Cursor CLI](https://cursor.com/cli) in an HTTP proxy that speaks both the **OpenAI** and **Anthropic** wire formats — so any AI client can use frontier models (Claude Fable 5, Claude Opus 4.8, GPT-5.5, Gemini 3.1 Pro, and 130+ more) **without any provider API keys**.
+Turn your **Cursor subscription** into a local AI API server. cursor-bridge wraps the [Cursor CLI](https://cursor.com/cli) in an HTTP proxy that speaks both the **OpenAI** and **Anthropic** wire formats — so any AI client can use frontier models (Claude Fable 5, Claude Opus 4.8, GPT-5.5, Gemini 3.1 Pro, and 130+ more) **without any provider API keys**. Runs natively on **Linux, macOS and Windows**.
 
 ## What it can do
 
@@ -12,7 +12,8 @@ Turn your **Cursor subscription** into a local AI API server. cursor-bridge wrap
 - **Model allowlist** — an interactive picker (`node select-models.mjs`) tames the 130+ model list and syncs it into Hermes / OpenClaw
 - **One-command integrations** — `./set-hermesagent.sh` configures Hermes Agent end-to-end (even on a fresh install, no Nous Portal needed)
 - **Ops-ready** (v2.2) — optional bearer auth (`BRIDGE_API_KEY`) for LAN/Tailscale use, Prometheus `/metrics`, daily-rotated logs, session continuity
-- **Zero dependencies** — pure Node.js built-in modules; runs on Linux, macOS and Windows
+- **Cross-platform** — Linux, macOS and Windows are all first-class: `install.sh`/`start.sh`/`stop.sh` have native PowerShell twins (`install.ps1`/`start.ps1`/`stop.ps1`), long prompts go via stdin to dodge OS command-line limits, and `.exe`/`.cmd`/`.bat`/`.ps1` Cursor binaries are all supported
+- **Zero dependencies** — pure Node.js built-in modules
 
 ```
 OpenAI / Anthropic clients ──► cursor-bridge (port 18790) ──► cursor agent --print ──► your Cursor subscription
@@ -22,15 +23,27 @@ OpenAI / Anthropic clients ──► cursor-bridge (port 18790) ──► cursor
 
 Requirements: **Node.js ≥ 22** and the [Cursor CLI](https://cursor.com/cli) logged in (`cursor agent login`).
 
+**Linux / macOS / WSL:**
+
 ```bash
 git clone https://github.com/Kinolian1107/bridge-cursor-cli.git
 cd bridge-cursor-cli
 
-./install.sh        # detects Cursor CLI, creates .env and start/stop scripts
-./start.sh daemon   # start in the background (Windows: .\start.ps1 daemon)
+./install.sh        # detects Cursor CLI, creates .env, offers OpenClaw integration
+./start.sh daemon   # start in the background
 ```
 
-Or manually: `cp .env.example .env` and `node cursor-bridge.mjs` — the bridge loads `.env` by itself on every platform.
+**Windows (PowerShell, native Cursor CLI install):**
+
+```powershell
+git clone https://github.com/Kinolian1107/bridge-cursor-cli.git
+cd bridge-cursor-cli
+
+.\install.ps1        # detects cursor-agent.exe, creates .env
+.\start.ps1 daemon   # start in the background (stop: .\stop.ps1)
+```
+
+Or manually on any platform: `cp .env.example .env` and `node cursor-bridge.mjs` — the bridge loads `.env` by itself.
 
 ## Try it
 

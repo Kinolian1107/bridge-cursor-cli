@@ -17,6 +17,7 @@ cursor-bridge 的所有版本更新紀錄。
 - **可選 bearer auth**（`lib/auth.mjs`）— 設定 `BRIDGE_API_KEY` 後，除 `/health` 外所有端點都需要帶 key。同時接受 `Authorization: Bearer <key>`（OpenAI 風格）與 `x-api-key: <key>`（Anthropic 風格）；比對使用 timing-safe。不設定（預設）維持 localhost-only 免驗證行為。Auth 錯誤依路徑回傳對應協議的形狀（OpenAI vs Anthropic）。
 - **Prometheus `/metrics`**（`lib/metrics.mjs`，todo 2.4）— text exposition format，提供 `bridge_requests_total{endpoint,method,status}`、`bridge_request_duration_seconds`（各端點 sum/count）、`bridge_auth_failures_total`、`bridge_inflight_requests`、`bridge_uptime_seconds`。endpoint label 有界（未知路徑歸入 `other`）。
 - `/health` 新增 `supports.anthropic_messages`、`supports.bearer_auth`、`supports.metrics`。
+- **`install.ps1`** — 對應 `install.sh` 的原生 Windows 安裝腳本（Node ≥ 22 檢查、偵測 `cursor-agent.exe`/`.cmd`、產生 `.env`），補齊 `start.ps1`/`stop.ps1` 的 PowerShell 腳本組。
 - 新增 38 個單元測試（`tests/anthropic-compat.test.mjs`、`tests/auth.test.mjs`、`tests/metrics.test.mjs`）— 共 81 個。
 
 ### 遷移注意事項

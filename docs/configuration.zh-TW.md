@@ -92,3 +92,5 @@ cat logs/cursor-bridge.20260416.log
 ```
 
 停止 bridge，若有 OpenClaw 備份則詢問是否還原，並移除 `~/.bashrc` 中的自動啟動項目。
+
+Windows：執行 `.\stop.ps1` 後直接刪除專案資料夾即可 — `install.ps1` 只會建立本地 `.env`（不寫 registry、不加開機啟動）。

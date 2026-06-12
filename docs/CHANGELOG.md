@@ -17,6 +17,7 @@ All notable changes to cursor-bridge are documented here.
 - **Optional bearer auth** (`lib/auth.mjs`) — set `BRIDGE_API_KEY` to require a key on every endpoint except `/health`. Accepts both `Authorization: Bearer <key>` (OpenAI style) and `x-api-key: <key>` (Anthropic style); comparison is timing-safe. Unset (default) keeps the localhost-only zero-auth behaviour. Auth errors are shaped per-protocol (OpenAI vs Anthropic) depending on the path.
 - **Prometheus `/metrics`** (`lib/metrics.mjs`, todo 2.4) — text exposition format with `bridge_requests_total{endpoint,method,status}`, `bridge_request_duration_seconds` (sum/count per endpoint), `bridge_auth_failures_total`, `bridge_inflight_requests`, `bridge_uptime_seconds`. Endpoint labels are bounded (unknown paths collapse into `other`).
 - `/health` adds `supports.anthropic_messages`, `supports.bearer_auth`, `supports.metrics`.
+- **`install.ps1`** — native Windows installer mirroring `install.sh` (Node ≥ 22 check, `cursor-agent.exe`/`.cmd` detection, `.env` generation), completing the PowerShell script set alongside `start.ps1`/`stop.ps1`.
 - 38 new unit tests (`tests/anthropic-compat.test.mjs`, `tests/auth.test.mjs`, `tests/metrics.test.mjs`) — 81 total.
 
 ### Migration notes

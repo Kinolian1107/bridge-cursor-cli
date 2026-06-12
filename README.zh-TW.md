@@ -2,7 +2,7 @@
 
 # cursor-bridge
 
-把你的 **Cursor 訂閱** 變成本機 AI API server。cursor-bridge 將 [Cursor CLI](https://cursor.com/cli) 包成 HTTP proxy，同時支援 **OpenAI** 與 **Anthropic** 兩種 wire format — 任何 AI 用戶端都能使用頂級模型（Claude Fable 5、Claude Opus 4.8、GPT-5.5、Gemini 3.1 Pro 等 130+ 個），**完全不需要各家的 API Key**。
+把你的 **Cursor 訂閱** 變成本機 AI API server。cursor-bridge 將 [Cursor CLI](https://cursor.com/cli) 包成 HTTP proxy，同時支援 **OpenAI** 與 **Anthropic** 兩種 wire format — 任何 AI 用戶端都能使用頂級模型（Claude Fable 5、Claude Opus 4.8、GPT-5.5、Gemini 3.1 Pro 等 130+ 個），**完全不需要各家的 API Key**。原生支援 **Linux、macOS 與 Windows**。
 
 ## 這個專案能做什麼
 
@@ -12,7 +12,8 @@
 - **模型 allowlist** — 互動式挑選工具（`node select-models.mjs`）馴服 130+ 模型清單，並同步到 Hermes / OpenClaw
 - **一行指令整合** — `./set-hermesagent.sh` 端到端設定 Hermes Agent（全新安裝也行，不需要 Nous Portal）
 - **維運就緒**（v2.2）— 可選 bearer auth（`BRIDGE_API_KEY`）供 LAN/Tailscale 使用、Prometheus `/metrics`、每日輪轉 log、session 延續
-- **零依賴** — 只用 Node.js 內建模組；支援 Linux、macOS 與 Windows
+- **跨平台** — Linux、macOS、Windows 都是一級公民：`install.sh`/`start.sh`/`stop.sh` 各有原生 PowerShell 對應版（`install.ps1`/`start.ps1`/`stop.ps1`），長 prompt 走 stdin 避開 OS 命令列長度限制，`.exe`/`.cmd`/`.bat`/`.ps1` 形式的 Cursor binary 全都支援
+- **零依賴** — 只用 Node.js 內建模組
 
 ```
 OpenAI / Anthropic 用戶端 ──► cursor-bridge (port 18790) ──► cursor agent --print ──► 你的 Cursor 訂閱
@@ -22,15 +23,27 @@ OpenAI / Anthropic 用戶端 ──► cursor-bridge (port 18790) ──► curs
 
 需求：**Node.js ≥ 22** 與已登入的 [Cursor CLI](https://cursor.com/cli)（`cursor agent login`）。
 
+**Linux / macOS / WSL：**
+
 ```bash
 git clone https://github.com/Kinolian1107/bridge-cursor-cli.git
 cd bridge-cursor-cli
 
-./install.sh        # 偵測 Cursor CLI，建立 .env 與 start/stop 腳本
-./start.sh daemon   # 背景啟動（Windows：.\start.ps1 daemon）
+./install.sh        # 偵測 Cursor CLI、建立 .env、可選 OpenClaw 整合
+./start.sh daemon   # 背景啟動
 ```
 
-或手動：`cp .env.example .env` 之後 `node cursor-bridge.mjs` — bridge 會自行載入 `.env`，所有平台通用。
+**Windows（PowerShell，原生 Cursor CLI 安裝）：**
+
+```powershell
+git clone https://github.com/Kinolian1107/bridge-cursor-cli.git
+cd bridge-cursor-cli
+
+.\install.ps1        # 偵測 cursor-agent.exe、建立 .env
+.\start.ps1 daemon   # 背景啟動（停止：.\stop.ps1）
+```
+
+或在任何平台手動：`cp .env.example .env` 之後 `node cursor-bridge.mjs` — bridge 會自行載入 `.env`。
 
 ## 試試看
 

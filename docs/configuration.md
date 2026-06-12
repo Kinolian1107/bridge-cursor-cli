@@ -92,3 +92,5 @@ The log stream auto-rotates at midnight without requiring a restart.
 ```
 
 Stops the bridge, optionally restores OpenClaw config from backup, and removes the auto-start entry from `~/.bashrc`.
+
+On Windows: run `.\stop.ps1`, then delete the project folder — `install.ps1` only creates the local `.env` (no registry or startup entries).
