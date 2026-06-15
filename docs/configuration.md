@@ -47,6 +47,86 @@ CURSOR_AUTH_TOKEN=your-auth-token-here
 
 The startup banner shows which authentication method is active. cursor-bridge passes all environment variables to the spawned process, so whichever method is set in your `.env` or shell environment is used automatically.
 
+## Exposing the bridge on a LAN
+
+By default the bridge binds to `127.0.0.1` — only the host machine can reach it. To let other computers on the same network use it as an endpoint, do three things on the machine running the bridge:
+
+### 1. Bind to all interfaces
+
+```bash
+# .env
+BRIDGE_HOST=0.0.0.0
+```
+
+`0.0.0.0` listens on every network interface so LAN clients can connect. Restart afterwards (`./stop.sh && ./start.sh daemon`); the startup banner should show `Host: 0.0.0.0`.
+
+### 2. Always set `BRIDGE_API_KEY`
+
+Once bound to `0.0.0.0`, **anyone who can reach the machine can spend your Cursor subscription**. Set a bearer key:
+
+```bash
+# .env
+BRIDGE_API_KEY=$(openssl rand -hex 32)   # or any sufficiently long random string
+```
+
+Every endpoint except `/health` then requires one of these headers:
+
+```bash
+-H "Authorization: Bearer <key>"
+# or
+-H "x-api-key: <key>"
+```
+
+> ⚠️ Skipping the key is only acceptable on a fully trusted home segment. For LAN / Tailscale, always set it.
+
+### 3. Find the LAN IP and open the firewall
+
+```bash
+# Find the IP (look for 192.168.x.x / 10.x.x.x)
+ip addr | grep "inet "          # Linux
+ipconfig                         # Windows (PowerShell)
+
+# Open port 18790
+sudo ufw allow 18790/tcp                              # Linux (ufw)
+```
+
+```powershell
+# Windows (Administrator PowerShell)
+New-NetFirewallRule -DisplayName "cursor-bridge" -Direction Inbound -LocalPort 18790 -Protocol TCP -Action Allow
+```
+
+### Connecting from other machines
+
+Replace `127.0.0.1` with the host's LAN IP and pass the key:
+
+```bash
+curl http://192.168.1.50:18790/v1/chat/completions \
+  -H "Authorization: Bearer <key>" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"auto","messages":[{"role":"user","content":"Hello!"}]}'
+```
+
+OpenClaw / Hermes / SDK clients: set `base_url` to `http://192.168.1.50:18790/v1` and use the same key.
+
+### ⚠️ Running inside WSL2
+
+WSL2 sits behind a NAT, so even with `BRIDGE_HOST=0.0.0.0` other LAN computers **cannot** reach the WSL IP directly — they only see the Windows host. Add a port forward on the **Windows host** (Administrator PowerShell):
+
+```powershell
+# Get the WSL IP
+wsl hostname -I
+
+# Forward the Windows host's 18790 into WSL (replace <WSL_IP> with the value above)
+netsh interface portproxy add v4tov4 `
+  listenaddress=0.0.0.0 listenport=18790 `
+  connectaddress=<WSL_IP> connectport=18790
+
+# Open the Windows firewall
+New-NetFirewallRule -DisplayName "cursor-bridge" -Direction Inbound -LocalPort 18790 -Protocol TCP -Action Allow
+```
+
+Other machines then connect to the **Windows host's** LAN IP (from `ipconfig`), not the WSL IP. The WSL IP changes on reboot, so re-run the forward after restarting (`netsh interface portproxy reset` clears the old rules). A native Linux/macOS host needs none of this — steps 1–3 are enough.
+
 ## Logs
 
 Logs are written to the `logs/` directory with daily rotation:

@@ -47,6 +47,86 @@ CURSOR_AUTH_TOKEN=your-auth-token-here
 
 啟動 banner 會顯示目前使用的認證方式。cursor-bridge 透過 `{ ...process.env }` 將所有環境變數傳遞給子程序，因此在 `.env` 或 shell 環境中設定的任何認證方式都會自動生效。
 
+## 對區域網路（LAN）開放 bridge
+
+bridge 預設綁定 `127.0.0.1`，只有本機連得到。要讓同網段其他電腦把它當 endpoint 用，在跑 bridge 的這台機器做三件事:
+
+### 1. 綁定所有網卡
+
+```bash
+# .env
+BRIDGE_HOST=0.0.0.0
+```
+
+`0.0.0.0` 會監聽所有網路介面,區網用戶端才連得進來。改完重啟（`./stop.sh && ./start.sh daemon`）,啟動 banner 應顯示 `Host: 0.0.0.0`。
+
+### 2. 務必設定 `BRIDGE_API_KEY`
+
+一旦綁了 `0.0.0.0`,**任何連得到這台的人都能花你的 Cursor 訂閱**。設一把 bearer 金鑰:
+
+```bash
+# .env
+BRIDGE_API_KEY=$(openssl rand -hex 32)   # 或任何夠長的隨機字串
+```
+
+設定後,除了 `/health` 以外每個端點都要帶下列任一 header:
+
+```bash
+-H "Authorization: Bearer <金鑰>"
+# 或
+-H "x-api-key: <金鑰>"
+```
+
+> ⚠️ 不設金鑰只適合完全信任的家用網段。LAN / Tailscale 一律建議設。
+
+### 3. 查區網 IP 並開防火牆
+
+```bash
+# 查 IP（找 192.168.x.x / 10.x.x.x 那組）
+ip addr | grep "inet "          # Linux
+ipconfig                         # Windows (PowerShell)
+
+# 開放 port 18790
+sudo ufw allow 18790/tcp                              # Linux (ufw)
+```
+
+```powershell
+# Windows（系統管理員 PowerShell）
+New-NetFirewallRule -DisplayName "cursor-bridge" -Direction Inbound -LocalPort 18790 -Protocol TCP -Action Allow
+```
+
+### 其他電腦這樣連
+
+把 `127.0.0.1` 換成這台的區網 IP,並帶上金鑰:
+
+```bash
+curl http://192.168.1.50:18790/v1/chat/completions \
+  -H "Authorization: Bearer <金鑰>" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"auto","messages":[{"role":"user","content":"Hello!"}]}'
+```
+
+OpenClaw / Hermes / SDK 用戶端:`base_url` 填 `http://192.168.1.50:18790/v1`,API key 填同一把。
+
+### ⚠️ 跑在 WSL2 裡的情況
+
+WSL2 在 NAT 後面,所以即使設了 `BRIDGE_HOST=0.0.0.0`,區網其他電腦也**連不到** WSL 的 IP —— 它們只看得到 Windows 主機。要在 **Windows 主機**（系統管理員 PowerShell）加一條 port forwarding:
+
+```powershell
+# 取得 WSL 的 IP
+wsl hostname -I
+
+# 把 Windows 主機的 18790 轉發進 WSL（把 <WSL_IP> 換成上面那組）
+netsh interface portproxy add v4tov4 `
+  listenaddress=0.0.0.0 listenport=18790 `
+  connectaddress=<WSL_IP> connectport=18790
+
+# 開 Windows 防火牆
+New-NetFirewallRule -DisplayName "cursor-bridge" -Direction Inbound -LocalPort 18790 -Protocol TCP -Action Allow
+```
+
+其他電腦接著連的是 **Windows 主機的**區網 IP（用 `ipconfig` 查）,不是 WSL 的。WSL IP 每次重開機會變,轉發規則要重設一次（`netsh interface portproxy reset` 清除舊規則）。原生 Linux/macOS 主機不需要這一步,做完步驟 1–3 即可。
+
 ## Log 管理
 
 Log 寫入 `logs/` 目錄，每日自動輪轉：

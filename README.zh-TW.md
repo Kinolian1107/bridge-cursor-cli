@@ -99,6 +99,7 @@ curl http://127.0.0.1:18790/v1/messages \
 |------|--------|
 | **API 參考** — 端點、Anthropic Messages API、bearer auth 與 Prometheus metrics、逐請求 `metadata.cursor_*` 選項、session 延續 | [docs/api.zh-TW.md](docs/api.zh-TW.md) |
 | **設定參數** — 所有環境變數、Cursor 認證、log 管理、疑難排解、解除安裝 | [docs/configuration.zh-TW.md](docs/configuration.zh-TW.md) |
+| └ 對 LAN 開放 — 讓同網段其他電腦連線（含 WSL2 port forwarding） | [docs/configuration.zh-TW.md](docs/configuration.zh-TW.md#對區域網路lan開放-bridge) |
 | **模型** — allowlist 挑選工具、推薦模型、即時模型清單、Tool Bridge 模式 | [docs/models.zh-TW.md](docs/models.zh-TW.md) |
 | **整合** — Hermes Agent、OpenClaw、Anthropic SDK / Claude Code | [docs/integrations.zh-TW.md](docs/integrations.zh-TW.md) |
 | └ Hermes 首次安裝（不走 Nous Portal） | [docs/hermes-setup.zh-TW.md](docs/hermes-setup.zh-TW.md) |

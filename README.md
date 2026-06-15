@@ -99,6 +99,7 @@ curl http://127.0.0.1:18790/v1/messages \
 |-------|-----------|
 | **API reference** — endpoints, Anthropic Messages API, bearer auth & Prometheus metrics, per-request `metadata.cursor_*` options, session continuity | [docs/api.md](docs/api.md) |
 | **Configuration** — all env vars, Cursor authentication, logs, troubleshooting, uninstall | [docs/configuration.md](docs/configuration.md) |
+| └ LAN / network exposure — share the bridge with other machines (incl. WSL2 port forwarding) | [docs/configuration.md](docs/configuration.md#exposing-the-bridge-on-a-lan) |
 | **Models** — allowlist picker, recommended models, live model list, Tool Bridge Mode | [docs/models.md](docs/models.md) |
 | **Integrations** — Hermes Agent, OpenClaw, Anthropic SDK / Claude Code | [docs/integrations.md](docs/integrations.md) |
 | └ Hermes first-time setup (no Nous Portal) | [docs/hermes-setup.md](docs/hermes-setup.md) |
