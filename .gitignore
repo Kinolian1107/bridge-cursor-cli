@@ -6,3 +6,9 @@ logs/
 *.pid
 models.json
 __pycache__/
+
+# Windows alternate-data-stream junk
+*:Zone.Identifier
+
+# Local-only screenshots / scratch
+test_img/
