@@ -23,6 +23,36 @@ OpenAI / Anthropic 用戶端 ──► cursor-bridge (port 18790) ──► curs
 
 需求：**Node.js ≥ 22** 與已登入的 [Cursor CLI](https://cursor.com/cli)（`cursor agent login`）。
 
+### 先安裝 Node.js（如果還沒裝）
+
+本專案是純 Node.js，沒有它無法執行。先確認你的環境：
+
+```bash
+node --version   # 必須是 v22.0.0 以上
+```
+
+若指令不存在或版本低於 22，請先安裝：
+
+```bash
+# Linux / macOS / WSL — nvm（推薦，免 sudo，可指定版本）
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+# 重開終端機後執行：
+nvm install 22
+
+# macOS — Homebrew
+brew install node@22
+
+# Ubuntu / Debian — NodeSource apt repo
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs
+```
+
+```powershell
+# Windows — winget（或到 https://nodejs.org 下載 LTS 安裝檔）
+winget install OpenJS.NodeJS.LTS
+```
+
+繼續之前，再跑一次 `node --version` 確認是 `v22+`。
+
 **Linux / macOS / WSL：**
 
 ```bash

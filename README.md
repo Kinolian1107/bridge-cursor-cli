@@ -23,6 +23,36 @@ OpenAI / Anthropic clients ──► cursor-bridge (port 18790) ──► cursor
 
 Requirements: **Node.js ≥ 22** and the [Cursor CLI](https://cursor.com/cli) logged in (`cursor agent login`).
 
+### Install Node.js first (if you don't have it)
+
+The bridge is pure Node.js — without it nothing will run. Check what you have:
+
+```bash
+node --version   # must print v22.0.0 or higher
+```
+
+If the command is missing or the version is below 22, install it:
+
+```bash
+# Linux / macOS / WSL — nvm (recommended, no sudo, picks the right version)
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+# reopen your terminal, then:
+nvm install 22
+
+# macOS — Homebrew
+brew install node@22
+
+# Ubuntu / Debian — NodeSource apt repo
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs
+```
+
+```powershell
+# Windows — winget (or download the LTS installer from https://nodejs.org)
+winget install OpenJS.NodeJS.LTS
+```
+
+Re-run `node --version` to confirm `v22+` before continuing.
+
 **Linux / macOS / WSL:**
 
 ```bash
