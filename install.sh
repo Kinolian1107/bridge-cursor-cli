@@ -85,6 +85,11 @@ CURSOR_WORKSPACE=${CURSOR_WORKSPACE}
 EOF
 ok "Created $ENV_FILE"
 
+# Create the cursor-agent workspace dir — cursor-agent errors with
+# "Workspace path does not exist" if --workspace points at a missing directory.
+mkdir -p "$CURSOR_WORKSPACE"
+ok "Workspace ready: $CURSOR_WORKSPACE"
+
 # ── 4. Start/stop scripts ───────────────────────────────────
 # start.sh / stop.sh ship with the repo — keep them executable instead of
 # regenerating embedded copies here that drift from the tracked versions.

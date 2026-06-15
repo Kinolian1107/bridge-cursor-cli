@@ -81,6 +81,11 @@ cat logs/cursor-bridge.20260416.log
 - 安裝：`curl https://cursor.com/install -fsS | bash`
 - 若安裝在非標準路徑，在 `.env` 中設定 `CURSOR_BIN` 完整路徑
 
+### `Workspace path does not exist`
+- bridge 啟動時會自動建立 `CURSOR_WORKSPACE`,但在此修正之前安裝的版本可能缺少
+  該目錄。手動建立:`mkdir -p ~/.cursor-bridge/workspace`(或 `.env` 裡設定的路徑),
+  然後重啟 bridge。重跑 `./install.sh`(或 `.\install.ps1`)也會建立它。
+
 ### 回應速度慢
 - 第一次請求可能較慢（Cursor agent 啟動時間約 5-15 秒）
 - `thinking` 模型需要更長時間，但會產生更好的結果

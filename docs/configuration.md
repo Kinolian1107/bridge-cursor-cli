@@ -81,6 +81,12 @@ The log stream auto-rotates at midnight without requiring a restart.
 - Install: `curl https://cursor.com/install -fsS | bash`
 - Set `CURSOR_BIN` in `.env` to the full path if needed
 
+### `Workspace path does not exist`
+- The bridge auto-creates `CURSOR_WORKSPACE` on startup, but an install from
+  before this fix may have a missing directory. Create it manually:
+  `mkdir -p ~/.cursor-bridge/workspace` (or the path set in `.env`), then restart
+  the bridge. Re-running `./install.sh` (or `.\install.ps1`) also creates it.
+
 ### Slow responses
 - First request may be slower (Cursor agent startup ~5-15s)
 - `thinking` models take longer but produce better results

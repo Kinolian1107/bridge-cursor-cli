@@ -94,6 +94,11 @@ CURSOR_WORKSPACE=$CursorWorkspace
 [System.IO.File]::WriteAllText($EnvFile, $EnvContent + "`n")
 Write-Host "[OK] Created $EnvFile"
 
+# Create the cursor-agent workspace dir -- cursor-agent errors with
+# "Workspace path does not exist" if --workspace points at a missing directory.
+New-Item -ItemType Directory -Force -Path $CursorWorkspace | Out-Null
+Write-Host "[OK] Workspace ready: $CursorWorkspace"
+
 # -- Done -------------------------------------------------------
 Write-Host ""
 Write-Host "+----------------------------------------------------------+"

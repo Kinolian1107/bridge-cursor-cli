@@ -182,6 +182,15 @@ const CONFIG = {
   toolBridgeAgentMode: process.env.CURSOR_TOOL_BRIDGE_AGENT_MODE ?? "",
 };
 
+// Ensure the cursor-agent workspace exists — it is passed via `--workspace` and
+// cursor-agent errors with "Workspace path does not exist" if the directory is
+// missing (the installer only writes the path into .env, it does not create it).
+try {
+  mkdirSync(CONFIG.workspace, { recursive: true });
+} catch (err) {
+  console.error(`[cursor-bridge] Failed to create workspace ${CONFIG.workspace}: ${err.message}`);
+}
+
 // Cache for available Cursor models (populated on first request)
 let _cachedModels = null;
 let _probePromise = null;
