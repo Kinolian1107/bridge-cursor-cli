@@ -42,19 +42,21 @@ curl "http://127.0.0.1:18790/v1/models?all=1"       # 略過 allowlist 取得完
 curl http://127.0.0.1:18790/v1/cursor-models
 ```
 
-Bridge 首次呼叫時透過 `cursor-agent --list-models` 探測並快取結果。常見模型範例（cursor-agent 2026.06 時點，共 130+ 個）：
+Bridge 首次呼叫時透過 `cursor-agent --list-models` 探測並快取結果。常見模型範例（cursor-agent 2026.08 時點，共 130+ 個）：
 
 | 模型 ID | 說明 |
 |---------|------|
 | `auto` | 讓 Cursor 自動選擇最佳模型 — **推薦** |
-| `claude-fable-5-thinking-medium` | Claude Fable 5 延伸思考（另有 `-low`/`-high`/`-xhigh`/`-max`） |
+| `cursor-grok-4.5-high` | Cursor Grok 4.5（非 fast；另有 `-low`/`-medium`；`-fast` 後綴 = fast 檔位） |
+| `claude-opus-5-thinking-high` | Claude Opus 5 延伸思考 |
+| `claude-fable-5-thinking-high` | Claude Fable 5 延伸思考 |
 | `claude-opus-4-8-thinking-high` | Claude Opus 4.8 延伸思考 |
-| `claude-4.6-opus-high-thinking` | Claude 4.6 Opus，高預算 + 延伸思考 |
+| `gpt-5.6-sol-high` | GPT-5.6 Sol High |
 | `gpt-5.5-high` | GPT-5.5 High（另有 `-none`/`-low`/`-medium`/`-extra-high`） |
 | `gpt-5.3-codex-high` | GPT-5.3 Codex High — 工具呼叫首選 |
-| `composer-2.5` | Cursor Composer 2.5（快） |
+| `composer-2.5` | Cursor Composer 2.5 |
 | `gemini-3.1-pro` | Gemini 3.1 Pro |
-| `grok-4.3` / `kimi-k2.5` | Grok 4.3 / Kimi K2.5 |
+| `kimi-k3-high` | Kimi K3 High |
 
 > 可用模型視你的 Cursor 訂閱方案而定，API 只回傳你的帳號實際可使用的模型。Cursor 很常改模型名稱 — 舊的 `opus-4.6-thinking`、`composer-2` 等 id 已經不存在，這也是預設改用 `auto` 的原因之一。
 

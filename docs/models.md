@@ -42,19 +42,21 @@ Query the bridge to get the live list of models available under your Cursor subs
 curl http://127.0.0.1:18790/v1/cursor-models
 ```
 
-The bridge probes the Cursor CLI (`cursor-agent --list-models`) on the first call and caches the result. Example models you may see (as of cursor-agent 2026.06 — 130+ total):
+The bridge probes the Cursor CLI (`cursor-agent --list-models`) on the first call and caches the result. Example models you may see (as of cursor-agent 2026.08 — 130+ total):
 
 | Model ID | Description |
 |----------|-------------|
 | `auto` | Let Cursor pick the best model — **recommended** |
-| `claude-fable-5-thinking-medium` | Claude Fable 5 with extended thinking (also `-low`/`-high`/`-xhigh`/`-max`) |
+| `cursor-grok-4.5-high` | Cursor Grok 4.5 (non-fast; also `-low`/`-medium`; `-fast` suffix = fast tier) |
+| `claude-opus-5-thinking-high` | Claude Opus 5 with extended thinking |
+| `claude-fable-5-thinking-high` | Claude Fable 5 with extended thinking |
 | `claude-opus-4-8-thinking-high` | Claude Opus 4.8 with extended thinking |
-| `claude-4.6-opus-high-thinking` | Claude 4.6 Opus, high budget + extended thinking |
+| `gpt-5.6-sol-high` | GPT-5.6 Sol High |
 | `gpt-5.5-high` | GPT-5.5 High (also `-none`/`-low`/`-medium`/`-extra-high`) |
 | `gpt-5.3-codex-high` | GPT-5.3 Codex High — best for tool calling |
-| `composer-2.5` | Cursor Composer 2.5 (fast) |
+| `composer-2.5` | Cursor Composer 2.5 |
 | `gemini-3.1-pro` | Gemini 3.1 Pro |
-| `grok-4.3` / `kimi-k2.5` | Grok 4.3 / Kimi K2.5 |
+| `kimi-k3-high` | Kimi K3 High |
 
 > Model availability depends on your Cursor subscription plan. The API returns only what your account can actually use. Cursor renames models frequently — old ids like `opus-4.6-thinking` or `composer-2` no longer exist, which is another reason `auto` is the default.
 
