@@ -28,7 +28,7 @@ curl "http://127.0.0.1:18790/v1/models?all=1"       # bypass the allowlist
 
 | Use case | Recommended model | Reason |
 |----------|-------------------|--------|
-| General chat / coding | `claude-fable-5-thinking-medium`, `claude-opus-4-8-thinking-high` or `auto` | Best quality reasoning |
+| General chat / coding | `cursor-grok-4.6-high` (default), `claude-fable-5-thinking-medium`, or `auto` | Grok 4.6 is the bridge default; Claude / `auto` remain available |
 | Tool-using agents (Hermes, etc.) | `gpt-5.3-codex-high` (**auto-selected**) | Reliably outputs `<tool_call>` blocks without refusing as "prompt injection" |
 | Fast / cheap tasks | `composer-2.5` or `gpt-5.3-codex-low` | Lower cost, fast |
 
@@ -46,7 +46,8 @@ The bridge probes the Cursor CLI (`cursor-agent --list-models`) on the first cal
 
 | Model ID | Description |
 |----------|-------------|
-| `auto` | Let Cursor pick the best model — **recommended** |
+| `cursor-grok-4.6-high` | Cursor Grok 4.6 — **default** (also `-low`/`-medium`/`-xhigh`; `-fast` suffix = fast tier) |
+| `auto` | Let Cursor pick the best model |
 | `cursor-grok-4.5-high` | Cursor Grok 4.5 (non-fast; also `-low`/`-medium`; `-fast` suffix = fast tier) |
 | `claude-opus-5-thinking-high` | Claude Opus 5 with extended thinking |
 | `claude-fable-5-thinking-high` | Claude Fable 5 with extended thinking |
@@ -58,7 +59,7 @@ The bridge probes the Cursor CLI (`cursor-agent --list-models`) on the first cal
 | `gemini-3.1-pro` | Gemini 3.1 Pro |
 | `kimi-k3-high` | Kimi K3 High |
 
-> Model availability depends on your Cursor subscription plan. The API returns only what your account can actually use. Cursor renames models frequently — old ids like `opus-4.6-thinking` or `composer-2` no longer exist, which is another reason `auto` is the default.
+> Model availability depends on your Cursor subscription plan. The API returns only what your account can actually use. Cursor renames models frequently — old ids like `opus-4.6-thinking` or `composer-2` no longer exist. The bridge default is `cursor-grok-4.6-high`; set `CURSOR_MODEL=auto` if you want Cursor to pick.
 
 Change the default model by setting `CURSOR_MODEL` in `.env` and restarting, or pass `model` in each API request for per-request switching.
 

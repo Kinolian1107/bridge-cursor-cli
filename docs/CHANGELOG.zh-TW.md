@@ -4,6 +4,31 @@ cursor-bridge 的所有版本更新紀錄。
 
 ---
 
+## v2.3（2026-09-06）
+
+**預設模型改為 Grok 4.6。支援圖片／聲音／影片輸入。完全向下相容。**
+
+### 新增
+
+- **多模態輸入**（`lib/multimodal.mjs`）— `/v1/chat/completions` 與 `/v1/messages` 現在接受圖片、聲音、影片、檔案內容。Bridge 會把媒體寫到每次請求的暫存目錄，用 cursor-agent `--add-dir` 掛上去，並注入 `<attached_media>` prompt 區塊讓模型讀檔。請求結束後刪除暫存檔。
+  - OpenAI：`image_url` / `input_image`、`input_audio` / `audio_url`、`video_url` / `input_video`、`file` / `input_file`、Gemini 風格 `inline_data`
+  - Anthropic：`image`、`audio`、`video`、`document` blocks（base64 或 URL）先轉成 OpenAI 形狀再走同一條管線
+  - 來源：`data:` URI、裸 base64、`http(s)` URL（`file:` 等其他 scheme 會被拒絕；localhost / RFC1918 預設拒絕，除非設 `BRIDGE_MEDIA_ALLOW_PRIVATE=true`）
+  - 下載採串流並有 byte 上限，timeout 涵蓋 body；redirect 會再檢查一次
+  - 詳細日誌會遮蔽 inline base64，避免把整份媒體寫進 log
+- `/health` 新增 `supports.multimodal_input` 與 `supports.multimodal_types`
+- 環境變數 `BRIDGE_MEDIA_MAX_BYTES`（50 MB）、`BRIDGE_MEDIA_MAX_FILES`（16）、`BRIDGE_MEDIA_FETCH_TIMEOUT_MS`（15 秒）、`BRIDGE_MEDIA_ALLOW_PRIVATE`、`BRIDGE_MAX_BODY_BYTES`（80 MB）
+
+### 變更
+
+- **預設模型改為 `cursor-grok-4.6-high`** — 取代 `auto`。可用 `CURSOR_MODEL` 或每次請求的 `model` 欄位覆寫。
+
+### 遷移注意事項
+
+- 純文字 client 無需修改。若你依賴舊的 `auto` 預設，在 `.env` 設 `CURSOR_MODEL=auto`。
+
+---
+
 ## v2.2（2026-06-13）
 
 **Anthropic Messages API + 可選 bearer auth + Prometheus metrics。完全向下相容。**

@@ -2,12 +2,13 @@
 
 # cursor-bridge
 
-Turn your **Cursor subscription** into a local AI API server. cursor-bridge wraps the [Cursor CLI](https://cursor.com/cli) in an HTTP proxy that speaks both the **OpenAI** and **Anthropic** wire formats — so any AI client can use frontier models (Claude Fable 5, Claude Opus 4.8, GPT-5.5, Gemini 3.1 Pro, and 130+ more) **without any provider API keys**. Runs natively on **Linux, macOS and Windows**.
+Turn your **Cursor subscription** into a local AI API server. cursor-bridge wraps the [Cursor CLI](https://cursor.com/cli) in an HTTP proxy that speaks both the **OpenAI** and **Anthropic** wire formats — so any AI client can use frontier models (Grok 4.6 by default, plus Claude Fable 5, Claude Opus 4.8, GPT-5.5, Gemini 3.1 Pro, and 130+ more) **without any provider API keys**. Runs natively on **Linux, macOS and Windows**.
 
 ## What it can do
 
 - **OpenAI-compatible API** — `POST /v1/chat/completions` (streaming & non-streaming) works with OpenClaw, Hermes Agent, Continue.dev, the OpenAI SDK, or plain `curl`
 - **Anthropic-compatible API** (v2.2) — `POST /v1/messages` lets the Anthropic SDK and even **Claude Code** (`ANTHROPIC_BASE_URL`) run on Cursor models
+- **Multimodal input** (v2.3) — image, audio, and video content parts on `/v1/chat/completions` and `/v1/messages` (data URIs, `http(s)` URLs, Anthropic `image`/`document` blocks)
 - **Tool calling** — full multi-turn `tools` loop, with automatic model switching to a codex model that reliably follows the tool protocol
 - **Model allowlist** — an interactive picker (`node select-models.mjs`) tames the 130+ model list and syncs it into Hermes / OpenClaw
 - **One-command integrations** — `./set-hermesagent.sh` configures Hermes Agent end-to-end (even on a fresh install, no Nous Portal needed)
@@ -104,7 +105,7 @@ curl http://127.0.0.1:18790/v1/messages \
 | **Integrations** — Hermes Agent, OpenClaw, Anthropic SDK / Claude Code | [docs/integrations.md](docs/integrations.md) |
 | └ Hermes first-time setup (no Nous Portal) | [docs/hermes-setup.md](docs/hermes-setup.md) |
 | **How it works** — request flow, CLI flags, fingerprint dedup, ACP | [docs/how-it-works.md](docs/how-it-works.md) |
-| **Changelog** — full version history (v1.0 → v2.2) | [docs/CHANGELOG.md](docs/CHANGELOG.md) |
+| **Changelog** — full version history (v1.0 → v2.3) | [docs/CHANGELOG.md](docs/CHANGELOG.md) |
 | **Roadmap / research notes** | [docs/todo.md](docs/todo.md) · [docs/research/](docs/research/) |
 
 Every doc has a Traditional Chinese mirror (`*.zh-TW.md`).

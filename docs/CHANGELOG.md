@@ -4,6 +4,31 @@ All notable changes to cursor-bridge are documented here.
 
 ---
 
+## v2.3 (2026-09-06)
+
+**Default model is Grok 4.6. Multimodal image / audio / video input. Fully backwards-compatible.**
+
+### Added
+
+- **Multimodal input** (`lib/multimodal.mjs`) — `/v1/chat/completions` and `/v1/messages` now accept image, audio, video, and file content parts. The bridge writes them to a per-request temp directory, adds that directory with cursor-agent `--add-dir`, and injects an `<attached_media>` prompt block so the model can read the files. After the request finishes the temp files are deleted.
+  - OpenAI: `image_url` / `input_image`, `input_audio` / `audio_url`, `video_url` / `input_video`, `file` / `input_file`, Gemini-style `inline_data`
+  - Anthropic: `image`, `audio`, `video`, `document` blocks (base64 or URL) are translated to the OpenAI shape first
+  - Sources: `data:` URIs, raw base64, and `http(s)` URLs (other schemes such as `file:` are rejected; localhost / RFC1918 downloads are refused unless `BRIDGE_MEDIA_ALLOW_PRIVATE=true`)
+  - Downloads are streamed with a byte cap and a timeout that covers the body; redirects are re-checked
+  - Verbose logs redact inline base64 so request dumps stay usable
+- `/health` adds `supports.multimodal_input` and `supports.multimodal_types`
+- Env vars `BRIDGE_MEDIA_MAX_BYTES` (50 MB), `BRIDGE_MEDIA_MAX_FILES` (16), `BRIDGE_MEDIA_FETCH_TIMEOUT_MS` (15s), `BRIDGE_MEDIA_ALLOW_PRIVATE`, `BRIDGE_MAX_BODY_BYTES` (80 MB)
+
+### Changed
+
+- **Default model: `cursor-grok-4.6-high`** — replaces `auto`. Override with `CURSOR_MODEL` or the per-request `model` field.
+
+### Migration notes
+
+- Existing text-only clients need no changes. If you relied on the previous `auto` default, set `CURSOR_MODEL=auto` in `.env`.
+
+---
+
 ## v2.2 (2026-06-13)
 
 **Anthropic Messages API + optional bearer auth + Prometheus metrics. Fully backwards-compatible.**

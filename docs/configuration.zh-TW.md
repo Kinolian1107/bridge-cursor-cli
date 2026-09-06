@@ -9,7 +9,12 @@
 | `BRIDGE_PORT` | `18790` | 代理伺服器埠號 |
 | `BRIDGE_HOST` | `127.0.0.1` | 綁定位址 |
 | `BRIDGE_API_KEY` | *（空）* | **v2.2** — 可選 bearer auth；設定後除 `/health` 外所有端點都需要帶 key（見 [api.zh-TW.md](api.zh-TW.md#bearer-auth-與-metricsv22)） |
-| `CURSOR_MODEL` | `auto` | 無 `tools` 的請求使用的預設模型 |
+| `CURSOR_MODEL` | `cursor-grok-4.6-high` | 無 `tools` 的請求使用的預設模型 |
+| `BRIDGE_MEDIA_MAX_BYTES` | `52428800`（50 MB） | **v2.3** — 單一圖片／聲音／影片／檔案附件的大小上限 |
+| `BRIDGE_MEDIA_MAX_FILES` | `16` | **v2.3** — 單次請求最多幾個媒體附件 |
+| `BRIDGE_MEDIA_FETCH_TIMEOUT_MS` | `15000` | **v2.3** — 下載 `http(s)` 媒體 URL 的逾時 |
+| `BRIDGE_MEDIA_ALLOW_PRIVATE` | `false` | **v2.3** — 允許下載 localhost / RFC1918 媒體（預設拒絕） |
+| `BRIDGE_MAX_BODY_BYTES` | `83886080`（80 MB） | **v2.3** — HTTP request body 大小上限 |
 | `CURSOR_TOOL_BRIDGE_MODEL` | `gpt-5.3-codex-high` | 有 `tools` 時使用的模型。Claude 系模型無法配合工具協議，codex 系模型可正常運作。設為 `""` 停用覆寫。 |
 | `CURSOR_TOOL_BRIDGE_AGENT_MODE` | `""` (full agent) | Tool Bridge 模式下 cursor-agent 的執行模式。預設（空字串）= full agent 模式，允許 shell/檔案執行，適合 `autohackmd` 等技能。設為 `"ask"` 還原唯讀 ask 模式。 |
 | `CURSOR_BIN` | `cursor` | `cursor` 或 `cursor-agent` 二進位檔路徑 |
@@ -110,22 +115,23 @@ OpenClaw / Hermes / SDK 用戶端:`base_url` 填 `http://192.168.1.50:18790/v1`,
 
 ### ⚠️ 跑在 WSL2 裡的情況
 
-WSL2 在 NAT 後面,所以即使設了 `BRIDGE_HOST=0.0.0.0`,區網其他電腦也**連不到** WSL 的 IP —— 它們只看得到 Windows 主機。要在 **Windows 主機**（系統管理員 PowerShell）加一條 port forwarding:
+使用 WSL mirrored networking 時，其他電腦連 Windows host 的 LAN IP。
+請在系統管理員 PowerShell 建立限制來源範圍的 Hyper-V 防火牆規則：
 
 ```powershell
-# 取得 WSL 的 IP
-wsl hostname -I
-
-# 把 Windows 主機的 18790 轉發進 WSL（把 <WSL_IP> 換成上面那組）
-netsh interface portproxy add v4tov4 `
-  listenaddress=0.0.0.0 listenport=18790 `
-  connectaddress=<WSL_IP> connectport=18790
-
-# 開 Windows 防火牆
-New-NetFirewallRule -DisplayName "cursor-bridge" -Direction Inbound -LocalPort 18790 -Protocol TCP -Action Allow
+New-NetFirewallHyperVRule `
+  -Name "WSL-cursor-cli-bridge" `
+  -DisplayName "WSL Cursor CLI bridge" `
+  -Direction Inbound `
+  -VMCreatorId "{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}" `
+  -Protocol TCP `
+  -LocalPorts 18790 `
+  -RemoteAddresses "192.168.1.0/24" `
+  -Profiles Private `
+  -Action Allow
 ```
 
-其他電腦接著連的是 **Windows 主機的**區網 IP（用 `ipconfig` 查）,不是 WSL 的。WSL IP 每次重開機會變,轉發規則要重設一次（`netsh interface portproxy reset` 清除舊規則）。原生 Linux/macOS 主機不需要這一步,做完步驟 1–3 即可。
+請把 subnet 換成信任的 LAN。NAT 模式才需要 `netsh interface portproxy`；不要在 mirrored networking 下混用 portproxy。
 
 ## Log 管理
 

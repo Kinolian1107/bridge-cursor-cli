@@ -15,7 +15,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ── Defaults (override via env) ──────────────────────────────
 BRIDGE_PORT="${BRIDGE_PORT:-18790}"
-CURSOR_MODEL="${CURSOR_MODEL:-auto}"
+CURSOR_MODEL="${CURSOR_MODEL:-cursor-grok-4.6-high}"
 CURSOR_WORKSPACE="${CURSOR_WORKSPACE:-$HOME/.cursor-bridge/workspace}"
 OPENCLAW_DIR="${OPENCLAW_DIR:-$HOME/.openclaw}"
 OPENCLAW_CONFIG="$OPENCLAW_DIR/openclaw.json"

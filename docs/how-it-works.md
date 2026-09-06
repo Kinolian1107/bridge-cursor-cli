@@ -34,11 +34,12 @@ Zero external dependencies — pure Node.js built-in modules.
    - Conversation history → `<conversation_history>` block
    - Latest user message → appended at the end
    - If `tools` are present → injected as `<tool_calling_protocol>` block (see [Tool Bridge Mode](models.md#tool-bridge-mode))
+   - Image / audio / video / file parts → written to a temp dir, listed in an `<attached_media>` block (v2.3)
 3. **cursor-bridge** spawns:
    ```
    cursor agent --print --force --model <model>
      --output-format stream-json --stream-partial-output
-     --workspace <path> [--worktree] [--mode ask|plan]
+     --workspace <path> [--add-dir <media-dir>] [--worktree] [--mode ask|plan]
    ```
    - Prompts ≤ 32KB: passed as CLI argument (Linux/macOS)
    - Prompts > 32KB — or any prompt on Windows: piped via stdin (avoids Linux `E2BIG` / Windows command-line limits)
@@ -56,6 +57,7 @@ Zero external dependencies — pure Node.js built-in modules.
 | `--stream-partial-output` | Incremental text deltas for live streaming |
 | `--model <id>` | Model selection |
 | `--workspace <path>` | Set repository root |
+| `--add-dir <path>` | Extra workspace root — used for materialized media files (v2.3) |
 | `--worktree` / `--worktree-base <branch>` / `--skip-worktree-setup` | Isolate edits in temp git worktree (v2.0 wired through) |
 | `--mode ask\|plan` | Read-only modes |
 | `--trust` | Skip workspace trust prompt (auto-added by v2.0 unless `cursor_trust=false`) |

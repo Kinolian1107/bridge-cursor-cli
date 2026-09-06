@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * cursor-bridge v2.2 — OpenAI-compatible API proxy for Cursor CLI
+ * cursor-bridge v2.3 — OpenAI-compatible API proxy for Cursor CLI
  *
  * 架構:
  *   Any OpenAI-compatible client  ──(OpenAI API)──►  cursor-bridge (port 18790)  ──►  cursor-agent --print --stream-json
@@ -25,6 +25,11 @@
  *     解決 Hermes /model 選單 130+ 模型爆量問題；?all=1 仍可取得完整清單
  *   - 預設模型改為 auto（舊預設 opus-4.6-thinking 已從 Cursor 移除）
  *   - bridge 自行載入 .env（process.loadEnvFile），不再依賴 start.sh
+ *
+ * v2.3 改進:
+ *   - 預設模型改為 cursor-grok-4.6-high
+ *   - 多模態輸入：OpenAI / Anthropic 的 image / audio / video / file 內容
+ *     會落地成暫存檔，再以 --add-dir 交給 cursor-agent 讀取
  *
  * v1.6 改進:
  *   - 修復 autohackmd / 需要執行 shell 指令的技能：移除 tool bridge mode 強制 --mode ask
@@ -64,6 +69,7 @@
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { createWriteStream, mkdirSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -73,6 +79,14 @@ import { agentArgs, spawnCursor, spawnCursorWithPrompt } from "./lib/cursor-cli.
 import { anthropicToOpenAI, createAnthropicResponseAdapter } from "./lib/anthropic-compat.mjs";
 import { isAuthorized } from "./lib/auth.mjs";
 import { createMetrics, endpointLabel } from "./lib/metrics.mjs";
+import {
+  MediaError,
+  contentPartToText,
+  mediaPromptSection,
+  parsePositiveInt,
+  prepareRequestMedia,
+  redactMessagesForLog,
+} from "./lib/multimodal.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -136,11 +150,10 @@ function verboseLog(tag, content) {
 
 // ─── Configuration ───────────────────────────────────────────────
 const CONFIG = {
-  port: parseInt(process.env.BRIDGE_PORT || "18790"),
+  port: parsePositiveInt(process.env.BRIDGE_PORT, 18790),
   host: process.env.BRIDGE_HOST || "127.0.0.1",
-  // "auto" lets Cursor pick — survives Cursor's frequent model renames.
   // Override with CURSOR_MODEL (see `cursor-agent --list-models` for current ids).
-  cursorModel: process.env.CURSOR_MODEL || "auto",
+  cursorModel: process.env.CURSOR_MODEL || "cursor-grok-4.6-high",
   cursorBin: process.env.CURSOR_BIN || "cursor",
   workspace: process.env.CURSOR_WORKSPACE || join(homedir(), ".cursor-bridge", "workspace"),
   // Model allowlist file written by select-models.mjs; filters /v1/models.
@@ -150,12 +163,12 @@ const CONFIG = {
   // Isolate edits in a temporary git worktree (stored under ~/.cursor/worktrees)
   // Equivalent to `cursor agent --worktree`
   worktree: process.env.CURSOR_WORKTREE === "true",
-  timeoutMs: parseInt(process.env.BRIDGE_TIMEOUT_MS || "300000"), // 5 minutes
+  timeoutMs: parsePositiveInt(process.env.BRIDGE_TIMEOUT_MS, 300000), // 5 minutes
   // Maximum prompt length (chars) to pass as CLI argument.
   // Linux MAX_ARG_STRLEN = 131072 bytes; with multi-byte chars (Chinese = 3 bytes/char)
   // and env overhead, we need a very conservative limit.
   // Above this (or always on Windows), the prompt is piped via stdin.
-  maxArgLen: parseInt(process.env.BRIDGE_MAX_ARG_LEN || "32768"),
+  maxArgLen: parsePositiveInt(process.env.BRIDGE_MAX_ARG_LEN, 32768),
   // Token estimation ratio: chars per token (lower = more conservative estimate)
   // For mixed English/Chinese content, ~3.0 is reasonable
   charsPerToken: parseFloat(process.env.BRIDGE_CHARS_PER_TOKEN || "3.0"),
@@ -180,7 +193,26 @@ const CONFIG = {
   //                but CANNOT write files or run upload scripts (breaks autohackmd).
   // Set CURSOR_TOOL_BRIDGE_AGENT_MODE=ask to restore old behaviour.
   toolBridgeAgentMode: process.env.CURSOR_TOOL_BRIDGE_AGENT_MODE ?? "",
+  // Multimodal input: max size / count / download timeout when materializing
+  // image / audio / video / file content parts onto disk for cursor-agent.
+  mediaMaxBytes: parsePositiveInt(process.env.BRIDGE_MEDIA_MAX_BYTES, 50 * 1024 * 1024),
+  mediaMaxFiles: parsePositiveInt(process.env.BRIDGE_MEDIA_MAX_FILES, 16),
+  mediaFetchTimeoutMs: parsePositiveInt(process.env.BRIDGE_MEDIA_FETCH_TIMEOUT_MS, 15000),
+  mediaAllowPrivate: process.env.BRIDGE_MEDIA_ALLOW_PRIVATE === "true",
+  maxBodyBytes: parsePositiveInt(process.env.BRIDGE_MAX_BODY_BYTES, 80 * 1024 * 1024),
 };
+
+const activeMediaDirs = new Set();
+
+function trackMediaDir(dir) {
+  if (dir) activeMediaDirs.add(dir);
+}
+
+function untrackAndRemoveMediaDir(dir) {
+  if (!dir) return;
+  activeMediaDirs.delete(dir);
+  return rm(dir, { recursive: true, force: true }).catch(() => {});
+}
 
 // Ensure the cursor-agent workspace exists — it is passed via `--workspace` and
 // cursor-agent errors with "Workspace path does not exist" if the directory is
@@ -273,12 +305,32 @@ const TOOL_CALL_FENCED_REGEX = /```(?:xml)?\s*\n?\s*<tool_call>\s*(\{[\s\S]*?\})
 function getContent(msg) {
   if (typeof msg.content === "string") return msg.content;
   if (Array.isArray(msg.content)) {
-    return msg.content
-      .filter((c) => c.type === "text")
-      .map((c) => c.text)
-      .join("\n");
+    return msg.content.map((c) => contentPartToText(c)).filter(Boolean).join("\n");
   }
   return String(msg.content ?? "");
+}
+
+function mediaPrepareOptions(dryRun = false) {
+  return {
+    dryRun,
+    maxBytes: CONFIG.mediaMaxBytes,
+    maxFiles: CONFIG.mediaMaxFiles,
+    fetchTimeoutMs: CONFIG.mediaFetchTimeoutMs,
+    allowPrivate: CONFIG.mediaAllowPrivate,
+  };
+}
+
+function buildPrompt(messages, tools, attachments) {
+  return mediaPromptSection(attachments) + messagesToPrompt(messages, tools);
+}
+
+function withMediaDirs(cursorOpts, media) {
+  if (!media?.mediaDir) return cursorOpts;
+  return {
+    ...cursorOpts,
+    addDirs: [media.mediaDir],
+    cleanupDirs: [media.mediaDir],
+  };
 }
 
 /**
@@ -545,11 +597,20 @@ function messagesToPrompt(messages, tools) {
  * Read the full request body as a string
  */
 async function readBody(req) {
-  let body = "";
+  const chunks = [];
+  let total = 0;
   for await (const chunk of req) {
-    body += chunk;
+    total += chunk.length;
+    if (total > CONFIG.maxBodyBytes) {
+      const err = new MediaError(`Request body exceeds ${CONFIG.maxBodyBytes} bytes`, {
+        status: 413,
+        type: "invalid_request",
+      });
+      throw err;
+    }
+    chunks.push(chunk);
   }
-  return body;
+  return Buffer.concat(chunks).toString();
 }
 
 /**
@@ -693,6 +754,15 @@ function runCursorAgent(prompt, requestModel, stream, res, tools, options) {
     args.push("--continue");
   }
 
+  // Extra workspace roots for materialized image / audio / video files.
+  if (Array.isArray(opts.addDirs)) {
+    for (const dir of opts.addDirs) {
+      if (typeof dir === "string" && dir.trim()) {
+        args.push("--add-dir", dir);
+      }
+    }
+  }
+
   const startTime = Date.now();
   const promptTokensEst = estimateTokens(prompt);
 
@@ -702,6 +772,18 @@ function runCursorAgent(prompt, requestModel, stream, res, tools, options) {
     env: { ...process.env },
     stdio: ["pipe", "pipe", "pipe"],
   });
+
+  const cleanupDirs = Array.isArray(opts.cleanupDirs) ? opts.cleanupDirs : [];
+  let mediaCleaned = false;
+  const disposeMedia = () => {
+    if (mediaCleaned) return;
+    mediaCleaned = true;
+    for (const dir of cleanupDirs) {
+      untrackAndRemoveMediaDir(dir);
+    }
+  };
+  proc.on("close", disposeMedia);
+  proc.on("error", disposeMedia);
 
   console.log(
     `[${new Date().toISOString()}] ▶ Request ${requestId.slice(-8)}: stream=${stream}, prompt_len=${prompt.length}, est_tokens=${promptTokensEst}, method=${useStdinPipe ? "stdin-pipe" : "arg"}, model=${model}`
@@ -1424,7 +1506,7 @@ const server = createServer(async (req, res) => {
       JSON.stringify({
         status: "ok",
         service: "cursor-bridge",
-        version: "2.2.0",
+        version: "2.3.0",
         model: CONFIG.cursorModel,
         mode: CONFIG.mode || "agent",
         outputFormat: "stream-json",
@@ -1442,6 +1524,8 @@ const server = createServer(async (req, res) => {
           anthropic_messages: true,
           bearer_auth: !!CONFIG.apiKey,
           metrics: true,
+          multimodal_input: true,
+          multimodal_types: ["image", "audio", "video", "file"],
         },
       })
     );
@@ -1488,6 +1572,10 @@ const server = createServer(async (req, res) => {
     try {
       body = await readBody(req);
     } catch (err) {
+      if (err instanceof MediaError) {
+        sendError(res, err.status, err.message, err.type);
+        return;
+      }
       sendError(res, 400, "Failed to read request body");
       return;
     }
@@ -1513,7 +1601,7 @@ const server = createServer(async (req, res) => {
       max_tokens: data.max_tokens,
       tools_count: tools.length,
       messages_count: messages.length,
-      messages,
+      messages: redactMessagesForLog(messages),
       ...(tools.length ? { tools } : {}),
       cursor_opts: cursorOpts,
     });
@@ -1523,11 +1611,30 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    // Convert messages to prompt, including tools reference
-    const prompt = messagesToPrompt(messages, tools);
+    let media;
+    try {
+      media = await prepareRequestMedia(messages, mediaPrepareOptions());
+    } catch (err) {
+      if (err instanceof MediaError) {
+        sendError(res, err.status, err.message, err.type);
+        return;
+      }
+      sendError(res, 500, err?.message || "Failed to process media", "internal_error");
+      return;
+    }
+
+    const prompt = buildPrompt(media.messages, tools, media.attachments);
     if (!prompt.trim()) {
+      await media.dispose();
       sendError(res, 400, "Empty prompt after processing messages", "invalid_request");
       return;
+    }
+
+    trackMediaDir(media.mediaDir);
+    if (media.attachments.length) {
+      console.log(
+        `  [media] ${media.attachments.map((a) => a.kind).join(", ")} (${media.attachments.length} file(s))`
+      );
     }
 
     if (tools.length) {
@@ -1538,7 +1645,7 @@ const server = createServer(async (req, res) => {
       );
     }
 
-    runCursorAgent(prompt, data.model, stream, res, tools, cursorOpts);
+    runCursorAgent(prompt, data.model, stream, res, tools, withMediaDirs(cursorOpts, media));
     return;
   }
 
@@ -1551,7 +1658,11 @@ const server = createServer(async (req, res) => {
     let body;
     try {
       body = await readBody(req);
-    } catch {
+    } catch (err) {
+      if (err instanceof MediaError) {
+        sendAnthropicError(res, err.status, err.message, err.type === "invalid_request" ? "invalid_request_error" : "api_error");
+        return;
+      }
       sendAnthropicError(res, 400, "Failed to read request body", "invalid_request_error");
       return;
     }
@@ -1575,7 +1686,7 @@ const server = createServer(async (req, res) => {
       max_tokens: data.max_tokens,
       tools_count: tools.length,
       messages_count: converted.messages.length,
-      messages: converted.messages,
+      messages: redactMessagesForLog(converted.messages),
       cursor_opts: cursorOpts,
     });
 
@@ -1584,14 +1695,28 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    const prompt = messagesToPrompt(converted.messages, tools);
+    let media;
+    try {
+      media = await prepareRequestMedia(converted.messages, mediaPrepareOptions());
+    } catch (err) {
+      if (err instanceof MediaError) {
+        sendAnthropicError(res, err.status, err.message, err.type === "invalid_request" ? "invalid_request_error" : "api_error");
+        return;
+      }
+      sendAnthropicError(res, 500, err?.message || "Failed to process media", "api_error");
+      return;
+    }
+
+    const prompt = buildPrompt(media.messages, tools, media.attachments);
     if (!prompt.trim()) {
+      await media.dispose();
       sendAnthropicError(res, 400, "Empty prompt after processing messages", "invalid_request_error");
       return;
     }
 
+    trackMediaDir(media.mediaDir);
     const adapted = createAnthropicResponseAdapter(res, { model: data.model });
-    runCursorAgent(prompt, converted.model, stream, adapted, tools, cursorOpts);
+    runCursorAgent(prompt, converted.model, stream, adapted, tools, withMediaDirs(cursorOpts, media));
     return;
   }
 
@@ -1600,12 +1725,27 @@ const server = createServer(async (req, res) => {
     let data;
     try {
       data = JSON.parse(await readBody(req));
-    } catch {
+    } catch (err) {
+      if (err instanceof MediaError) {
+        sendAnthropicError(res, err.status, err.message, err.type === "invalid_request" ? "invalid_request_error" : "api_error");
+        return;
+      }
       sendAnthropicError(res, 400, "Invalid JSON in request body", "invalid_request_error");
       return;
     }
     const converted = anthropicToOpenAI(data);
-    const prompt = messagesToPrompt(converted.messages, converted.tools);
+    let media;
+    try {
+      media = await prepareRequestMedia(converted.messages, mediaPrepareOptions(true));
+    } catch (err) {
+      if (err instanceof MediaError) {
+        sendAnthropicError(res, err.status, err.message, err.type === "invalid_request" ? "invalid_request_error" : "api_error");
+        return;
+      }
+      sendAnthropicError(res, 400, err?.message || "Failed to process media", "invalid_request_error");
+      return;
+    }
+    const prompt = buildPrompt(media.messages, converted.tools, media.attachments);
     res.writeHead(200, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
     res.end(JSON.stringify({ input_tokens: estimateTokens(prompt) }));
     return;
@@ -1692,7 +1832,7 @@ server.listen(CONFIG.port, CONFIG.host, () => {
     : "cursor agent login";
   console.log(`
 ┌──────────────────────────────────────────────────────────┐
-│              cursor-bridge v2.2.0                        │
+│              cursor-bridge v2.3.0                        │
 │    OpenAI-compatible API  →  Cursor CLI Agent            │
 ├──────────────────────────────────────────────────────────┤
 │  Endpoint:   http://${CONFIG.host}:${CONFIG.port}/v1/chat/completions  │
@@ -1730,7 +1870,11 @@ server.on("error", (err) => {
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.on(signal, () => {
     console.log(`\n[cursor-bridge] Received ${signal}, shutting down...`);
-    server.close(() => process.exit(0));
+    const dirs = [...activeMediaDirs];
+    Promise.all(dirs.map((dir) => rm(dir, { recursive: true, force: true }).catch(() => {})))
+      .finally(() => {
+        server.close(() => process.exit(0));
+      });
     // Force exit after 5s
     setTimeout(() => process.exit(1), 5000);
   });

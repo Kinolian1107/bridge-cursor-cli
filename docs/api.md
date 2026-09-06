@@ -50,7 +50,40 @@ curl http://127.0.0.1:18790/v1/messages \
   -d '{"model":"auto","max_tokens":1024,"messages":[{"role":"user","content":"Hello!"}]}'
 ```
 
-Supported: `system` (string or blocks), multi-turn history, `tools` / `tool_use` / `tool_result` round-trips (via the same Tool Bridge Mode as the OpenAI path), streaming SSE (`message_start` → `content_block_delta` → `message_stop`), and `POST /v1/messages/count_tokens` (estimate). Internally the request is translated to the OpenAI shape and runs through the exact same pipeline — all `metadata.cursor_*` per-request options work here too.
+Supported: `system` (string or blocks), multi-turn history, `tools` / `tool_use` / `tool_result` round-trips (via the same Tool Bridge Mode as the OpenAI path), streaming SSE (`message_start` → `content_block_delta` → `message_stop`), and `POST /v1/messages/count_tokens` (estimate). Internally the request is translated to the OpenAI shape and runs through the exact same pipeline — all `metadata.cursor_*` per-request options work here too. Image / audio / video / document blocks are preserved (see [Multimodal input](#multimodal-input-v23)).
+
+## Multimodal input (v2.3)
+
+The bridge accepts image, audio, video, and file parts on both `/v1/chat/completions` and `/v1/messages`. cursor-agent has no `--file` flag, so each attachment is written to a per-request temp directory, that directory is passed as `--add-dir`, and the prompt lists the saved paths. Files are deleted when the request finishes.
+
+Whether the **model** can actually see audio or video still depends on the model you pick (Grok 4.6 and other multimodal models can; text-only models will only see the file path).
+
+### OpenAI content parts
+
+```bash
+curl http://127.0.0.1:18790/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "cursor-grok-4.6-high",
+    "messages": [{
+      "role": "user",
+      "content": [
+        { "type": "text", "text": "What is in this clip?" },
+        { "type": "image_url", "image_url": { "url": "data:image/png;base64,..." } },
+        { "type": "input_audio", "input_audio": { "data": "...", "format": "wav" } },
+        { "type": "video_url", "video_url": { "url": "https://example.com/clip.mp4" } }
+      ]
+    }]
+  }'
+```
+
+Recognised types: `image_url` / `input_image`, `input_audio` / `audio_url`, `video_url` / `input_video` / `video`, `file` / `input_file`, and Gemini-style `inline_data`. Sources may be a `data:` URI, raw base64, or an `http(s)` URL. `file:` and other schemes are rejected, as are localhost / RFC1918 destinations (override with `BRIDGE_MEDIA_ALLOW_PRIVATE=true`).
+
+### Anthropic content blocks
+
+`image`, `audio`, `video`, and `document` blocks (base64 `source` or URL) on `/v1/messages` are translated and then follow the same path.
+
+Limits are configurable: `BRIDGE_MEDIA_MAX_BYTES` (50 MB), `BRIDGE_MEDIA_MAX_FILES` (16), `BRIDGE_MEDIA_FETCH_TIMEOUT_MS` (15s), `BRIDGE_MAX_BODY_BYTES` (80 MB).
 
 ## Bearer Auth & Metrics (v2.2)
 

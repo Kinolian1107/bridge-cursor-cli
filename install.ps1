@@ -14,7 +14,7 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 # Defaults (override via environment before running)
 $BridgePort = if ($env:BRIDGE_PORT) { $env:BRIDGE_PORT } else { "18790" }
-$CursorModel = if ($env:CURSOR_MODEL) { $env:CURSOR_MODEL } else { "auto" }
+$CursorModel = if ($env:CURSOR_MODEL) { $env:CURSOR_MODEL } else { "cursor-grok-4.6-high" }
 $CursorWorkspace = if ($env:CURSOR_WORKSPACE) { $env:CURSOR_WORKSPACE } else { Join-Path $env:USERPROFILE ".cursor-bridge\workspace" }
 
 Write-Host ""

@@ -120,6 +120,71 @@ test("passes through stream flag and metadata", () => {
   assert.deepEqual(o.metadata, { cursor_mode: "ask" });
 });
 
+test("preserves Anthropic image / audio / video / document blocks as OpenAI parts", () => {
+  const o = anthropicToOpenAI({
+    messages: [{
+      role: "user",
+      content: [
+        { type: "text", text: "describe these" },
+        { type: "image", source: { type: "base64", media_type: "image/png", data: "aaa" } },
+        { type: "audio", source: { type: "base64", media_type: "audio/wav", data: "bbb" } },
+        { type: "video", source: { type: "url", url: "https://x.test/c.mp4" } },
+        { type: "document", source: { type: "base64", media_type: "application/pdf", data: "ccc" }, filename: "note.pdf" },
+      ],
+    }],
+  });
+  const parts = o.messages[0].content;
+  assert.equal(o.messages[0].role, "user");
+  assert.deepEqual(parts[0], { type: "text", text: "describe these" });
+  assert.equal(parts[1].type, "image_url");
+  assert.equal(parts[1].image_url.url, "data:image/png;base64,aaa");
+  assert.equal(parts[2].type, "input_audio");
+  assert.equal(parts[2].input_audio.data, "bbb");
+  assert.equal(parts[3].type, "video_url");
+  assert.equal(parts[3].video_url.url, "https://x.test/c.mp4");
+  assert.equal(parts[4].type, "file");
+  assert.equal(parts[4].file.filename, "note.pdf");
+});
+
+test("preserves interleaved text and image order", () => {
+  const o = anthropicToOpenAI({
+    messages: [{
+      role: "user",
+      content: [
+        { type: "text", text: "before" },
+        { type: "image", source: { type: "url", url: "https://x.test/a.png" } },
+        { type: "text", text: "after" },
+      ],
+    }],
+  });
+  const parts = o.messages[0].content;
+  assert.equal(parts[0].text, "before");
+  assert.equal(parts[1].type, "image_url");
+  assert.equal(parts[2].text, "after");
+});
+
+test("Anthropic text documents become user text, not base64 files", () => {
+  const o = anthropicToOpenAI({
+    messages: [{
+      role: "user",
+      content: [{ type: "document", source: { type: "text", data: "plain notes" } }],
+    }],
+  });
+  assert.deepEqual(o.messages, [{ role: "user", content: "plain notes" }]);
+});
+
+test("image-only Anthropic user message still produces a user message", () => {
+  const o = anthropicToOpenAI({
+    messages: [{
+      role: "user",
+      content: [{ type: "image", source: { type: "url", url: "https://x.test/a.png" } }],
+    }],
+  });
+  assert.equal(o.messages.length, 1);
+  assert.equal(o.messages[0].role, "user");
+  assert.equal(o.messages[0].content[0].type, "image_url");
+});
+
 test("ignores unknown roles and empty bodies safely", () => {
   const o = anthropicToOpenAI({ messages: [{ role: "weird", content: "x" }] });
   assert.equal(o.messages.length, 0);

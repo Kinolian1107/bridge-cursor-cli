@@ -28,7 +28,7 @@ curl "http://127.0.0.1:18790/v1/models?all=1"       # 略過 allowlist 取得完
 
 | 使用場景 | 推薦模型 | 原因 |
 |----------|----------|------|
-| 一般對話 / 程式開發 | `claude-fable-5-thinking-medium`、`claude-opus-4-8-thinking-high` 或 `auto` | 最佳推理品質 |
+| 一般對話 / 程式開發 | `cursor-grok-4.6-high`（預設）、`claude-fable-5-thinking-medium` 或 `auto` | Grok 4.6 是 bridge 預設；Claude / `auto` 仍可指定 |
 | 工具型 Agent（Hermes 瀏覽器工具等）| `gpt-5.3-codex-high`（**自動選用**） | 能穩定輸出 `<tool_call>` blocks 而不拒絕 |
 | 快速 / 低成本任務 | `composer-2.5` 或 `gpt-5.3-codex-low` | 成本較低、速度快 |
 
@@ -46,7 +46,8 @@ Bridge 首次呼叫時透過 `cursor-agent --list-models` 探測並快取結果�
 
 | 模型 ID | 說明 |
 |---------|------|
-| `auto` | 讓 Cursor 自動選擇最佳模型 — **推薦** |
+| `cursor-grok-4.6-high` | Cursor Grok 4.6 — **預設**（另有 `-low`/`-medium`/`-xhigh`；`-fast` 後綴 = fast 檔位） |
+| `auto` | 讓 Cursor 自動選擇最佳模型 |
 | `cursor-grok-4.5-high` | Cursor Grok 4.5（非 fast；另有 `-low`/`-medium`；`-fast` 後綴 = fast 檔位） |
 | `claude-opus-5-thinking-high` | Claude Opus 5 延伸思考 |
 | `claude-fable-5-thinking-high` | Claude Fable 5 延伸思考 |
@@ -58,7 +59,7 @@ Bridge 首次呼叫時透過 `cursor-agent --list-models` 探測並快取結果�
 | `gemini-3.1-pro` | Gemini 3.1 Pro |
 | `kimi-k3-high` | Kimi K3 High |
 
-> 可用模型視你的 Cursor 訂閱方案而定，API 只回傳你的帳號實際可使用的模型。Cursor 很常改模型名稱 — 舊的 `opus-4.6-thinking`、`composer-2` 等 id 已經不存在，這也是預設改用 `auto` 的原因之一。
+> 可用模型視你的 Cursor 訂閱方案而定，API 只回傳你的帳號實際可使用的模型。Cursor 很常改模型名稱 — 舊的 `opus-4.6-thinking`、`composer-2` 等 id 已經不存在。Bridge 預設是 `cursor-grok-4.6-high`；若要讓 Cursor 自動選，設 `CURSOR_MODEL=auto`。
 
 在 `.env` 中設定 `CURSOR_MODEL` 並重啟，或在每次請求的 `model` 欄位直接指定。
 

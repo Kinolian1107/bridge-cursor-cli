@@ -9,7 +9,12 @@ All configuration is via environment variables (or the `.env` file — the bridg
 | `BRIDGE_PORT` | `18790` | Port for the proxy server |
 | `BRIDGE_HOST` | `127.0.0.1` | Bind address |
 | `BRIDGE_API_KEY` | *(empty)* | **v2.2** — optional bearer auth; when set, every endpoint except `/health` requires the key (see [api.md](api.md#bearer-auth--metrics-v22)) |
-| `CURSOR_MODEL` | `auto` | Default model for requests without `tools` |
+| `CURSOR_MODEL` | `cursor-grok-4.6-high` | Default model for requests without `tools` |
+| `BRIDGE_MEDIA_MAX_BYTES` | `52428800` (50 MB) | **v2.3** — max size per attached image / audio / video / file |
+| `BRIDGE_MEDIA_MAX_FILES` | `16` | **v2.3** — max number of media attachments per request |
+| `BRIDGE_MEDIA_FETCH_TIMEOUT_MS` | `15000` | **v2.3** — timeout when downloading `http(s)` media URLs |
+| `BRIDGE_MEDIA_ALLOW_PRIVATE` | `false` | **v2.3** — allow fetching media from localhost / RFC1918 (default refuses) |
+| `BRIDGE_MAX_BODY_BYTES` | `83886080` (80 MB) | **v2.3** — max HTTP request body size |
 | `CURSOR_TOOL_BRIDGE_MODEL` | `gpt-5.3-codex-high` | Model used when `tools` are present. Claude models refuse tool protocols — codex models work reliably. Set `""` to disable override. |
 | `CURSOR_TOOL_BRIDGE_AGENT_MODE` | `""` (full agent) | cursor-agent mode for tool bridge requests. Default (empty) = full agent mode, which allows shell/file execution for skills like `autohackmd`. Set `"ask"` to restore read-only ask mode. |
 | `CURSOR_BIN` | `cursor` | Path to `cursor` or `cursor-agent` binary |
@@ -110,22 +115,24 @@ OpenClaw / Hermes / SDK clients: set `base_url` to `http://192.168.1.50:18790/v1
 
 ### ⚠️ Running inside WSL2
 
-WSL2 sits behind a NAT, so even with `BRIDGE_HOST=0.0.0.0` other LAN computers **cannot** reach the WSL IP directly — they only see the Windows host. Add a port forward on the **Windows host** (Administrator PowerShell):
+With WSL mirrored networking, clients use the Windows host's LAN IP. Add a
+source-scoped Hyper-V firewall rule from an Administrator PowerShell:
 
 ```powershell
-# Get the WSL IP
-wsl hostname -I
-
-# Forward the Windows host's 18790 into WSL (replace <WSL_IP> with the value above)
-netsh interface portproxy add v4tov4 `
-  listenaddress=0.0.0.0 listenport=18790 `
-  connectaddress=<WSL_IP> connectport=18790
-
-# Open the Windows firewall
-New-NetFirewallRule -DisplayName "cursor-bridge" -Direction Inbound -LocalPort 18790 -Protocol TCP -Action Allow
+New-NetFirewallHyperVRule `
+  -Name "WSL-cursor-cli-bridge" `
+  -DisplayName "WSL Cursor CLI bridge" `
+  -Direction Inbound `
+  -VMCreatorId "{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}" `
+  -Protocol TCP `
+  -LocalPorts 18790 `
+  -RemoteAddresses "192.168.1.0/24" `
+  -Profiles Private `
+  -Action Allow
 ```
 
-Other machines then connect to the **Windows host's** LAN IP (from `ipconfig`), not the WSL IP. The WSL IP changes on reboot, so re-run the forward after restarting (`netsh interface portproxy reset` clears the old rules). A native Linux/macOS host needs none of this — steps 1–3 are enough.
+Replace the subnet with your trusted LAN. NAT mode is what needs
+`netsh interface portproxy`; do not mix portproxy with mirrored networking.
 
 ## Logs
 

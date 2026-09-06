@@ -2,12 +2,13 @@
 
 # cursor-bridge
 
-把你的 **Cursor 訂閱** 變成本機 AI API server。cursor-bridge 將 [Cursor CLI](https://cursor.com/cli) 包成 HTTP proxy，同時支援 **OpenAI** 與 **Anthropic** 兩種 wire format — 任何 AI 用戶端都能使用頂級模型（Claude Fable 5、Claude Opus 4.8、GPT-5.5、Gemini 3.1 Pro 等 130+ 個），**完全不需要各家的 API Key**。原生支援 **Linux、macOS 與 Windows**。
+把你的 **Cursor 訂閱** 變成本機 AI API server。cursor-bridge 將 [Cursor CLI](https://cursor.com/cli) 包成 HTTP proxy，同時支援 **OpenAI** 與 **Anthropic** 兩種 wire format — 任何 AI 用戶端都能使用頂級模型（預設 Grok 4.6，另有 Claude Fable 5、Claude Opus 4.8、GPT-5.5、Gemini 3.1 Pro 等 130+ 個），**完全不需要各家的 API Key**。原生支援 **Linux、macOS 與 Windows**。
 
 ## 這個專案能做什麼
 
 - **OpenAI 相容 API** — `POST /v1/chat/completions`（串流與非串流），OpenClaw、Hermes Agent、Continue.dev、OpenAI SDK 或 `curl` 都能直接用
 - **Anthropic 相容 API**（v2.2）— `POST /v1/messages` 讓 Anthropic SDK、甚至 **Claude Code**（`ANTHROPIC_BASE_URL`）跑在 Cursor 模型上
+- **多模態輸入**（v2.3）— `/v1/chat/completions` 與 `/v1/messages` 接受圖片、聲音、影片內容（data URI、`http(s)` URL、Anthropic `image`/`document` blocks）
 - **Tool calling** — 完整的多輪 `tools` 循環，自動切換到能穩定遵循工具協議的 codex 模型
 - **模型 allowlist** — 互動式挑選工具（`node select-models.mjs`）馴服 130+ 模型清單，並同步到 Hermes / OpenClaw
 - **一行指令整合** — `./set-hermesagent.sh` 端到端設定 Hermes Agent（全新安裝也行，不需要 Nous Portal）
@@ -104,7 +105,7 @@ curl http://127.0.0.1:18790/v1/messages \
 | **整合** — Hermes Agent、OpenClaw、Anthropic SDK / Claude Code | [docs/integrations.zh-TW.md](docs/integrations.zh-TW.md) |
 | └ Hermes 首次安裝（不走 Nous Portal） | [docs/hermes-setup.zh-TW.md](docs/hermes-setup.zh-TW.md) |
 | **運作原理** — 請求流程、CLI flags、fingerprint dedup、ACP | [docs/how-it-works.zh-TW.md](docs/how-it-works.zh-TW.md) |
-| **更新日誌** — 完整版本歷史（v1.0 → v2.2） | [docs/CHANGELOG.zh-TW.md](docs/CHANGELOG.zh-TW.md) |
+| **更新日誌** — 完整版本歷史（v1.0 → v2.3） | [docs/CHANGELOG.zh-TW.md](docs/CHANGELOG.zh-TW.md) |
 | **Roadmap / 研究筆記** | [docs/todo.md](docs/todo.md) · [docs/research/](docs/research/) |
 
 每份文件都有英文版（去掉 `.zh-TW` 後綴）。

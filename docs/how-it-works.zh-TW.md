@@ -34,11 +34,12 @@
    - 對話歷史 → `<conversation_history>` 區塊
    - 最新使用者訊息 → 附加在最後
    - 若有 `tools` → 注入為 `<tool_calling_protocol>` 區塊（見 [Tool Bridge 模式](models.zh-TW.md#tool-bridge-模式)）
+   - 圖片／聲音／影片／檔案內容 → 寫入暫存目錄，並列在 `<attached_media>` 區塊（v2.3）
 3. **cursor-bridge** 啟動：
    ```
    cursor agent --print --force --model <model>
      --output-format stream-json --stream-partial-output
-     --workspace <path> [--worktree] [--mode ask|plan]
+     --workspace <path> [--add-dir <media-dir>] [--worktree] [--mode ask|plan]
    ```
    - Prompt ≤ 32KB：作為 CLI 參數傳遞（Linux/macOS）
    - Prompt > 32KB — 或在 Windows 上任何長度：透過 stdin 直接傳遞（避免 Linux `E2BIG` / Windows 命令列長度限制）
@@ -56,6 +57,7 @@
 | `--stream-partial-output` | 增量文字 delta，支援即時串流 |
 | `--model <id>` | 選擇模型 |
 | `--workspace <path>` | 設定 repository root |
+| `--add-dir <path>` | 額外 workspace root — 用來掛載落地後的媒體檔（v2.3） |
 | `--worktree` / `--worktree-base <branch>` / `--skip-worktree-setup` | 在暫時 git worktree 中隔離編輯（v2.0 全部接通） |
 | `--mode ask\|plan` | 唯讀模式 |
 | `--trust` | 跳過 workspace trust 提示（v2.0 預設自動加，可用 `cursor_trust=false` 關閉） |

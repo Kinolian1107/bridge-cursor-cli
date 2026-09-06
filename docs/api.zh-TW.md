@@ -50,7 +50,40 @@ curl http://127.0.0.1:18790/v1/messages \
   -d '{"model":"auto","max_tokens":1024,"messages":[{"role":"user","content":"你好！"}]}'
 ```
 
-支援範圍：`system`（字串或 blocks）、多輪對話歷史、`tools` / `tool_use` / `tool_result` 完整循環（走與 OpenAI 路徑相同的 Tool Bridge Mode）、串流 SSE（`message_start` → `content_block_delta` → `message_stop`）、以及 `POST /v1/messages/count_tokens`（估算值）。內部實作是把 request 轉成 OpenAI 形狀走完全相同的管線 — 所有 `metadata.cursor_*` per-request 選項在這裡一樣有效。
+支援範圍：`system`（字串或 blocks）、多輪對話歷史、`tools` / `tool_use` / `tool_result` 完整循環（走與 OpenAI 路徑相同的 Tool Bridge Mode）、串流 SSE（`message_start` → `content_block_delta` → `message_stop`）、以及 `POST /v1/messages/count_tokens`（估算值）。內部實作是把 request 轉成 OpenAI 形狀走完全相同的管線 — 所有 `metadata.cursor_*` per-request 選項在這裡一樣有效。圖片／聲音／影片／文件 blocks 會被保留（見[多模態輸入](#多模態輸入v23)）。
+
+## 多模態輸入（v2.3）
+
+`/v1/chat/completions` 與 `/v1/messages` 都接受圖片、聲音、影片、檔案內容。cursor-agent 沒有 `--file` 旗標，所以每個附件會寫到該次請求的暫存目錄，再用 `--add-dir` 掛進去，prompt 會列出存檔路徑。請求結束後刪除暫存檔。
+
+**模型**能不能真正看懂聲音或影片，仍取決於你選的模型（Grok 4.6 等多元模態模型可以；純文字模型只看得到檔案路徑）。
+
+### OpenAI content parts
+
+```bash
+curl http://127.0.0.1:18790/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "cursor-grok-4.6-high",
+    "messages": [{
+      "role": "user",
+      "content": [
+        { "type": "text", "text": "這段畫面有什麼？" },
+        { "type": "image_url", "image_url": { "url": "data:image/png;base64,..." } },
+        { "type": "input_audio", "input_audio": { "data": "...", "format": "wav" } },
+        { "type": "video_url", "video_url": { "url": "https://example.com/clip.mp4" } }
+      ]
+    }]
+  }'
+```
+
+可辨識的 type：`image_url` / `input_image`、`input_audio` / `audio_url`、`video_url` / `input_video` / `video`、`file` / `input_file`，以及 Gemini 風格 `inline_data`。來源可以是 `data:` URI、裸 base64，或 `http(s)` URL。`file:` 與其他 scheme 會被拒絕，localhost / RFC1918 目的地也一樣（要用內網媒體請設 `BRIDGE_MEDIA_ALLOW_PRIVATE=true`）。
+
+### Anthropic content blocks
+
+`/v1/messages` 上的 `image`、`audio`、`video`、`document` blocks（base64 `source` 或 URL）會先轉換，再走同一條管線。
+
+上限可設定：`BRIDGE_MEDIA_MAX_BYTES`（50 MB）、`BRIDGE_MEDIA_MAX_FILES`（16）、`BRIDGE_MEDIA_FETCH_TIMEOUT_MS`（15 秒）、`BRIDGE_MAX_BODY_BYTES`（80 MB）。
 
 ## Bearer Auth 與 Metrics（v2.2）
 

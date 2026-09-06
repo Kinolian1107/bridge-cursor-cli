@@ -14,7 +14,7 @@ if [ -f "$SCRIPT_DIR/.env" ]; then
 fi
 
 BRIDGE_PORT="${BRIDGE_PORT:-18790}"
-CURSOR_MODEL="${CURSOR_MODEL:-auto}"
+CURSOR_MODEL="${CURSOR_MODEL:-cursor-grok-4.6-high}"
 OPENCLAW_DIR="${OPENCLAW_DIR:-$HOME/.openclaw}"
 OPENCLAW_CONFIG="$OPENCLAW_DIR/openclaw.json"
 PROVIDER_NAME="cursor-cli"
